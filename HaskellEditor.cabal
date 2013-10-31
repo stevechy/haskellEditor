@@ -1,0 +1,17 @@
+name:    HaskellEditor
+version: 0.0
+synopsis : A haskell editor
+build-type : Simple
+cabal-version: >= 1.2
+
+
+executable haskellEditor
+    main-is: Main.hs
+    ghc-options: -Wall
+    build-depends: base >= 4.3.0.0,
+                   gtk == 0.12.4,
+                   aeson ,
+                   yaml,
+                   ghc-prim,
+                   containers
+
