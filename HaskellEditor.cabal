@@ -10,8 +10,13 @@ executable haskellEditor
     ghc-options: -Wall
     build-depends: base >= 4.3.0.0,
                    gtk == 0.12.4,
+                   gtksourceview2,
                    aeson ,
                    yaml,
                    ghc-prim,
-                   containers
+                   containers,
+                   directory,
+                   filepath,
+                   stm
+
 
