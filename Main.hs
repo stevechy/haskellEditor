@@ -8,7 +8,7 @@ import System.Directory
 import System.FilePath
 import Control.Concurrent.STM
 
-data EditorWindow = EditorWindow { mainPane:: HPaned, _fileTreeStore :: TreeStore String, _fileTreeView:: TreeView, notebook :: Notebook, _rootPath :: TVar (Maybe FilePath) }
+data EditorWindow = EditorWindow { mainPane:: VPaned, _fileTreeStore :: TreeStore String, _fileTreeView:: TreeView, notebook :: Notebook, _rootPath :: TVar (Maybe FilePath) }
 
 main :: IO ()
 main = do
@@ -31,6 +31,7 @@ main = do
     onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
     
     boxPackStart mainBox (mainPane editor) PackGrow 0
+             
 
     onDestroy window mainQuit
     widgetShowAll button    
@@ -47,6 +48,8 @@ openFileChooserFile editor treePath treeViewColumn =
     return ()
     
 makeEditor = do
+    mainVPane <- vPanedNew
+    
     mainHBox <- hPanedNew
     panedSetPosition mainHBox 250
     fileTreeScrolledWindow <- scrolledWindowNew Nothing Nothing
@@ -71,9 +74,22 @@ makeEditor = do
     widgetShow noteBook
     panedAdd2 mainHBox noteBook    
     
+    panedAdd1 mainVPane mainHBox
+    widgetShow mainHBox
+    
+    consoleBook <- notebookNew
+    notebookSetTabPos consoleBook PosBottom
+    buttonPage <- hBoxNew False 0
+    notebookAppendPage consoleBook buttonPage "Shortcuts"
+    widgetShow consoleBook
+    panedAdd2 mainVPane consoleBook
+    widgetShow mainVPane
+    
+    panedSetPosition mainVPane 500
+    
     filePath <- atomically $ newTVar Nothing
     
-    return EditorWindow { mainPane = mainHBox, _fileTreeView = fileTreeView, _fileTreeStore = treeStore, notebook = noteBook, _rootPath = filePath } 
+    return EditorWindow { mainPane = mainVPane, _fileTreeView = fileTreeView, _fileTreeStore = treeStore, notebook = noteBook, _rootPath = filePath } 
 
 parseConfig :: FilePath -> IO (Maybe Configuration.Types.Configuration)
 parseConfig = Data.Yaml.decodeFile
@@ -92,6 +108,9 @@ addNotebookTab editor title = do
       Nothing -> return ()
     textView <- sourceViewNewWithBuffer sourceBuffer 
     sourceViewSetShowLineNumbers textView True
+    font <- fontDescriptionNew
+    fontDescriptionSetFamily font "monospace"
+    widgetModifyFont textView (Just font)
     containerAdd textViewScrolledWindow textView
     widgetShowAll textViewScrolledWindow
     notebookAppendPage noteBook textViewScrolledWindow title
