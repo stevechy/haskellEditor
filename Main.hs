@@ -10,6 +10,8 @@ import Control.Concurrent.STM
 import qualified Data.IntMap.Strict as IntMap
 import Data.IORef
 import Control.Monad
+import qualified Shelly
+import Data.String
 
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
                                    _fileTreeStore :: TreeStore String, 
@@ -180,17 +182,34 @@ loadFile editor path = do
     Nothing -> return ()
 
 loadConfiguration editor config filepath = do
-  path <- canonicalizePath filepath
-  let rootPath = combine (dropFileName path) $ rootFolder config
-  canonicalRootPath <- canonicalizePath rootPath
-  atomically $ writeTVar (_rootPath editor) $ Just canonicalRootPath
-  dirContents <- getDirectoryContents canonicalRootPath
-  putStrLn $ show $ dirContents
-  let forest = map (\file -> Node { rootLabel = file, subForest = [] }) dirContents
+  
+  canonicalRootPath <- getCanonicalRootPath config filepath
+  
+  atomically $ writeTVar (_rootPath editor) $ Just canonicalRootPath  
+  forest <- getDirContentsAsTree canonicalRootPath
   let fileTreeStore = _fileTreeStore editor 
   treeStoreClear fileTreeStore  
   treeStoreInsertForest fileTreeStore [] 0 forest
   return ()
+
+getCanonicalRootPath config filepath = do
+  path <- canonicalizePath filepath
+  let rootPath = combine (dropFileName path) $ rootFolder config
+  canonicalRootPath <- canonicalizePath rootPath
+  return canonicalRootPath
+  
+getDirContentsAsTree rootPath = getDirContentsAsTreeWithRelpath rootPath "."
+  
+getDirContentsAsTreeWithRelpath rootPath relPath = do
+  dirContents <- getDirectoryContents (combine rootPath relPath)
+  putStrLn $ show $ dirContents
+  forest <- mapM (getFileNode rootPath) $ filter (\x -> x /= "." && x /= "..") $  dirContents
+  return forest
+
+getFileNode rootPath filePath = do  
+  isDirectory <- Shelly.shelly $ Shelly.test_d $ fromString $ combine rootPath filePath
+  
+  return $ if isDirectory then Node { rootLabel = filePath, subForest = [ Node {rootLabel =".", subForest=[]} ] } else Node { rootLabel = filePath, subForest = [] }
 
 newFileChooser handleChoice = do
     window <- windowNew
