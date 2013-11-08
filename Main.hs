@@ -14,13 +14,15 @@ import qualified Shelly
 import Data.String
 
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
-                                   _fileTreeStore :: TreeStore String, 
+                                   _fileTreeStore :: TreeStore DirectoryEntry, 
                                    _fileTreeView:: TreeView, 
                                    notebook :: Notebook, 
                                    _rootPath :: TVar (Maybe FilePath),                                    
                                    nextGuiId :: IORef (Int), 
                                    sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer))
                                    }
+
+data DirectoryEntry = Directory String | PlainFile String String
 
 main :: IO ()
 main = do
@@ -78,26 +80,48 @@ saveFiles editor = do
 openFileChooserFile editor treePath treeViewColumn = 
   do
     let treeStore = _fileTreeStore editor
-    fileName <- treeStoreGetValue treeStore treePath
-    tabNum <- addNotebookTab editor fileName
-    widgetQueueDraw (notebook editor)
+    dirEntry <- treeStoreGetValue treeStore treePath
+    case dirEntry of
+      PlainFile fileName filePath -> do
+        tabNum <- addNotebookTab editor filePath
+        widgetQueueDraw (notebook editor)
+      _ -> return ()
     return ()
     
+fileLabelRenderer label = case label of
+  Directory directory -> [cellText := directory]
+  PlainFile file _ ->  [cellText := file]
+
+iconLabelRenderer label = case label of
+  Directory directory -> [cellPixbufStockId := stockDirectory]
+  _ -> [cellPixbufStockId := stockFile]
+
+fileTreeStoreNew :: IO (TreeStore DirectoryEntry)
+fileTreeStoreNew = treeStoreNew []
+
 makeEditor = do
     mainVPane <- vPanedNew
     
     mainHBox <- hPanedNew
     panedSetPosition mainHBox 250
     fileTreeScrolledWindow <- scrolledWindowNew Nothing Nothing
-    treeStore <- treeStoreNew []
-    let column = makeColumnIdString 0
-    treeModelSetColumn treeStore column id
+    treeStore <- fileTreeStoreNew
+    
     fileTreeView <- treeViewNewWithModel treeStore
+    
+
+
+    iconTheme <- iconThemeGetDefault
+    
     treeViewColumn <- treeViewColumnNew
     treeViewColumnSetTitle treeViewColumn "Project Files"
+    typePix <- cellRendererPixbufNew
     cellRenderer <- cellRendererTextNew
+    treeViewColumnPackStart treeViewColumn typePix True
     treeViewColumnPackStart treeViewColumn cellRenderer True 
-    cellLayoutSetAttributes treeViewColumn cellRenderer treeStore $ (\label -> [cellText := label])
+    cellLayoutSetAttributes treeViewColumn cellRenderer treeStore fileLabelRenderer
+    cellLayoutSetAttributes treeViewColumn typePix treeStore iconLabelRenderer
+    
     treeViewAppendColumn fileTreeView treeViewColumn
     Just maybeColumn <- treeViewGetColumn fileTreeView 0
 
@@ -166,7 +190,16 @@ addNotebookTab editor title = do
       modifyTVar' (sourceBuffers editor) (\bufferMap -> IntMap.insert guiId (title, sourceBuffer) bufferMap)
       return ()
     
-    notebookAppendPage noteBook textViewScrolledWindow title
+    tabBar <- hBoxNew True 0
+    tabLabel <- labelNew (Just title)
+    tabClose <- imageNewFromStock stockCancel IconSizeSmallToolbar
+    boxPackStart tabBar tabLabel PackNatural 0
+    boxPackStart tabBar tabClose PackNatural 0
+    widgetShowAll tabBar
+    
+    menuLabel <- labelNew Nothing
+    
+    notebookAppendPageMenu noteBook textViewScrolledWindow tabBar menuLabel
 
 loadConfigFile path = do
     maybeConfiguration <- parseConfig path    
@@ -203,13 +236,18 @@ getDirContentsAsTree rootPath = getDirContentsAsTreeWithRelpath rootPath "."
 getDirContentsAsTreeWithRelpath rootPath relPath = do
   dirContents <- getDirectoryContents (combine rootPath relPath)
   putStrLn $ show $ dirContents
-  forest <- mapM (getFileNode rootPath) $ filter (\x -> x /= "." && x /= "..") $  dirContents
+  forest <- mapM (getFileNode rootPath relPath) $ filter (\x -> x /= "." && x /= "..") $  dirContents
   return forest
 
-getFileNode rootPath filePath = do  
-  isDirectory <- Shelly.shelly $ Shelly.test_d $ fromString $ combine rootPath filePath
+getFileNode rootPath relPath filePath = do  
+  isDirectory <- Shelly.shelly $ Shelly.test_d $ fromString $ combine rootPath $ combine relPath filePath
   
-  return $ if isDirectory then Node { rootLabel = filePath, subForest = [ Node {rootLabel =".", subForest=[]} ] } else Node { rootLabel = filePath, subForest = [] }
+  if isDirectory 
+    then do
+         subDirectories <- getDirContentsAsTreeWithRelpath rootPath (combine relPath filePath)
+         return Node { rootLabel = Directory filePath, subForest = subDirectories } 
+    else return (Node { rootLabel = PlainFile filePath (combine relPath filePath), subForest = [] })
+  
 
 newFileChooser handleChoice = do
     window <- windowNew
