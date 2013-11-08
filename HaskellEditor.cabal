@@ -14,9 +14,9 @@ executable haskellEditor
                    aeson ,
                    yaml,
                    ghc-prim,
-                   containers,
+                   containers == 0.5.3.1,
                    directory,
                    filepath,
-                   stm
+                   stm == 2.4.2
 
 

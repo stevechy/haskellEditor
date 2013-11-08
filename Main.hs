@@ -7,8 +7,18 @@ import Data.Yaml
 import System.Directory
 import System.FilePath
 import Control.Concurrent.STM
+import qualified Data.IntMap.Strict as IntMap
+import Data.IORef
+import Control.Monad
 
-data EditorWindow = EditorWindow { mainPane:: VPaned, _fileTreeStore :: TreeStore String, _fileTreeView:: TreeView, notebook :: Notebook, _rootPath :: TVar (Maybe FilePath) }
+data EditorWindow = EditorWindow { mainPane:: VPaned, 
+                                   _fileTreeStore :: TreeStore String, 
+                                   _fileTreeView:: TreeView, 
+                                   notebook :: Notebook, 
+                                   _rootPath :: TVar (Maybe FilePath),                                    
+                                   nextGuiId :: IORef (Int), 
+                                   sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer))
+                                   }
 
 main :: IO ()
 main = do
@@ -19,14 +29,21 @@ main = do
     mainBox <- vBoxNew False 0
     _ <- containerAdd window mainBox
 
+    buttonBar <- hBoxNew False 0
+    
     button <- buttonNewWithLabel "Open Project"
-   
-    boxPackStart mainBox button PackNatural 0
+    saveButton <- buttonNewWithLabel "Save Files"
+    boxPackStart buttonBar button PackNatural 0
+    boxPackStart buttonBar saveButton PackNatural 0
+    widgetShowAll buttonBar
+    
+    boxPackStart mainBox buttonBar PackNatural 0
           
     editor <- makeEditor
     
     
     onClicked button $ newFileChooser $ loadFile editor
+    onClicked saveButton $ saveFiles editor
     
     onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
     
@@ -38,6 +55,23 @@ main = do
     widgetShowAll mainBox
     widgetShowAll window
     mainGUI
+    
+saveFiles editor = do    
+  buffers <- atomically $ readTVar $ sourceBuffers editor
+  _ <- forM 
+           (IntMap.elems buffers) 
+           (\ (fileName, buffer) -> do 
+               startIter <- textBufferGetStartIter buffer
+               endIter <- textBufferGetEndIter buffer
+               text <- textBufferGetText buffer startIter endIter True
+               putStrLn "Saving file"
+               putStrLn fileName
+               putStrLn "-----"
+               putStrLn text
+               return ()
+               )
+       
+  return ()
     
 openFileChooserFile editor treePath treeViewColumn = 
   do
@@ -88,8 +122,18 @@ makeEditor = do
     panedSetPosition mainVPane 500
     
     filePath <- atomically $ newTVar Nothing
+    buffers <- atomically $ newTVar IntMap.empty
     
-    return EditorWindow { mainPane = mainVPane, _fileTreeView = fileTreeView, _fileTreeStore = treeStore, notebook = noteBook, _rootPath = filePath } 
+    guiId <- newIORef 0
+    
+    return EditorWindow { mainPane = mainVPane, 
+                          _fileTreeView = fileTreeView, 
+                          _fileTreeStore = treeStore, 
+                          notebook = noteBook, 
+                          _rootPath = filePath, 
+                          nextGuiId = guiId,
+                          sourceBuffers = buffers
+                        } 
 
 parseConfig :: FilePath -> IO (Maybe Configuration.Types.Configuration)
 parseConfig = Data.Yaml.decodeFile
@@ -113,6 +157,13 @@ addNotebookTab editor title = do
     widgetModifyFont textView (Just font)
     containerAdd textViewScrolledWindow textView
     widgetShowAll textViewScrolledWindow
+    
+    guiId <- atomicModifyIORef (nextGuiId editor) (\x -> (x+1, x) )
+    
+    _ <- atomically $ do
+      modifyTVar' (sourceBuffers editor) (\bufferMap -> IntMap.insert guiId (title, sourceBuffer) bufferMap)
+      return ()
+    
     notebookAppendPage noteBook textViewScrolledWindow title
 
 loadConfigFile path = do
