@@ -1,6 +1,7 @@
 import Graphics.UI.Gtk
 import Graphics.UI.Gtk.SourceView.SourceView
 import Graphics.UI.Gtk.SourceView.SourceBuffer
+import Graphics.UI.Gtk.SourceView.SourceLanguageManager
 import Configuration.Types
 import Data.Tree
 import Data.Yaml
@@ -8,6 +9,7 @@ import System.Directory
 import System.FilePath
 import Control.Concurrent.STM
 import qualified Data.IntMap.Strict as IntMap
+import qualified Data.Map as Map
 import Data.IORef
 import Control.Monad
 import qualified Shelly
@@ -23,6 +25,8 @@ data EditorWindow = EditorWindow { mainPane:: VPaned,
                                    }
 
 data DirectoryEntry = Directory String | PlainFile String String
+
+languageFileExtensions = Map.fromList [(".hs", "haskell")]
 
 main :: IO ()
 main = do
@@ -175,7 +179,21 @@ parseConfig = Data.Yaml.decodeFile
 addNotebookTab editor title = do
     let noteBook = notebook editor
     textViewScrolledWindow <- scrolledWindowNew Nothing Nothing
+   
+    
+    sourceLanguageManager <- sourceLanguageManagerGetDefault
+    putStrLn $ takeExtension title
+    let languageKeyMaybe = Map.lookup (takeExtension title) languageFileExtensions
+    languageMaybe <- case languageKeyMaybe of
+      Just language ->  sourceLanguageManagerGetLanguage sourceLanguageManager language
+      Nothing -> return Nothing
+    
     sourceBuffer <- sourceBufferNew Nothing
+    
+    
+    
+    _ <- sourceBufferSetLanguage sourceBuffer languageMaybe
+    
     rootPath <- atomically $ readTVar $ _rootPath editor
     case rootPath of
       Just path -> do
