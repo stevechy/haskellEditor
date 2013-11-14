@@ -62,20 +62,28 @@ main = do
     
 saveFiles editor = do    
   buffers <- atomically $ readTVar $ sourceBuffers editor
-  _ <- forM 
-           (IntMap.elems buffers) 
-           (\ (fileName, buffer) -> do 
-               startIter <- textBufferGetStartIter buffer
-               endIter <- textBufferGetEndIter buffer
-               text <- textBufferGetText buffer startIter endIter True
-               putStrLn "Saving file"
-               putStrLn fileName
-               putStrLn "-----"
-               putStrLn text
-               return ()
-               )
-       
+  rootPathMaybe <- atomically $ readTVar $ _rootPath editor
+  case rootPathMaybe of       
+    Just rootPath -> do
+      saveBuffers rootPath buffers
+      return ()
+    Nothing -> return ()
   return ()
+
+saveBuffers rootPath buffers = do
+  forM 
+    (IntMap.elems buffers) 
+    (\ (fileName, buffer) -> do 
+        startIter <- textBufferGetStartIter buffer
+        endIter <- textBufferGetEndIter buffer
+        text <- textBufferGetText buffer startIter endIter True
+        putStrLn "Saving file"
+        putStrLn fileName
+        putStrLn "-----"
+        putStrLn text
+        writeFile (combine rootPath fileName) text
+        return ()
+    )
     
 openFileChooserFile editor treePath treeViewColumn = 
   do
