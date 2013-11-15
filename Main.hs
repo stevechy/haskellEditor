@@ -143,6 +143,7 @@ makeEditor = do
     panedAdd1 mainHBox fileTreeScrolledWindow 
     
     noteBook <- notebookNew
+    notebookSetScrollable noteBook True
     widgetShow noteBook
     panedAdd2 mainHBox noteBook    
     
@@ -216,11 +217,29 @@ addNotebookTab editor title = do
       modifyTVar' (sourceBuffers editor) (\bufferMap -> IntMap.insert guiId (title, sourceBuffer) bufferMap)
       return ()
     
-    tabBar <- hBoxNew True 0
+    tabBar <- hBoxNew False 0
     tabLabel <- labelNew (Just title)
-    tabClose <- imageNewFromStock stockCancel IconSizeSmallToolbar
-    boxPackStart tabBar tabLabel PackNatural 0
+    closeImage <- imageNewFromStock stockClose IconSizeSmallToolbar
+    tabClose <- buttonNew
+    
+    buttonSetImage tabClose closeImage 
+    buttonSetRelief tabClose ReliefNone
+    buttonSetFocusOnClick tabClose False
+    
+    onClicked tabClose $ do 
+      pageNumberMaybe <- notebookPageNum noteBook textViewScrolledWindow
+      case pageNumberMaybe of
+        Just pageNumber -> do
+                               notebookRemovePage noteBook pageNumber
+                               atomically $ do 
+                                 modifyTVar (sourceBuffers editor ) (IntMap.delete guiId)                                 
+                                 return ()
+                               return ()
+        Nothing -> return ()
+    
+    boxPackStart tabBar tabLabel PackGrow 0
     boxPackStart tabBar tabClose PackNatural 0
+    
     widgetShowAll tabBar
     
     menuLabel <- labelNew Nothing
@@ -283,7 +302,7 @@ newFileChooser handleChoice = do
 
     containerAdd window fch
 
-    onFileActivated fch $
+    _ <- onFileActivated fch $
         do filePath <- fileChooserGetFilename fch
            case filePath of
                Just dpath -> do putStrLn dpath
