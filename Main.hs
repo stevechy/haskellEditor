@@ -14,6 +14,8 @@ import Data.IORef
 import Control.Monad
 import qualified Shelly
 import Data.String
+import qualified Data.List
+import qualified Data.Ord
 
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
                                    _fileTreeStore :: TreeStore DirectoryEntry, 
@@ -40,7 +42,7 @@ main = do
     buttonBar <- hBoxNew False 0
     
     button <- buttonNewWithLabel "Open Project"
-    saveButton <- buttonNewWithLabel "Save Files"
+    saveButton <- buttonNewWithMnemonic "_Save Files"
     boxPackStart buttonBar button PackNatural 0
     boxPackStart buttonBar saveButton PackNatural 0
     widgetShowAll buttonBar
@@ -80,11 +82,7 @@ saveBuffers rootPath buffers = do
     (\ (fileName, buffer) -> do 
         startIter <- textBufferGetStartIter buffer
         endIter <- textBufferGetEndIter buffer
-        text <- textBufferGetText buffer startIter endIter True
-        putStrLn "Saving file"
-        putStrLn fileName
-        putStrLn "-----"
-        putStrLn text
+        text <- textBufferGetText buffer startIter endIter True       
         writeFile (combine rootPath fileName) text
         return ()
     )
@@ -183,7 +181,7 @@ addNotebookTab editor title = do
    
     
     sourceLanguageManager <- sourceLanguageManagerGetDefault
-    putStrLn $ takeExtension title
+    
     let languageKeyMaybe = Map.lookup (takeExtension title) languageFileExtensions
     languageMaybe <- case languageKeyMaybe of
       Just language ->  sourceLanguageManagerGetLanguage sourceLanguageManager language
@@ -198,8 +196,7 @@ addNotebookTab editor title = do
     rootPath <- atomically $ readTVar $ _rootPath editor
     case rootPath of
       Just path -> do
-        fileContents <- readFile (combine path title)        
-        putStrLn fileContents
+        fileContents <- readFile (combine path title)              
         textBufferSetText sourceBuffer fileContents
         return ()
       Nothing -> return ()
@@ -280,9 +277,17 @@ getDirContentsAsTree rootPath = getDirContentsAsTreeWithRelpath rootPath "."
   
 getDirContentsAsTreeWithRelpath rootPath relPath = do
   dirContents <- getDirectoryContents (combine rootPath relPath)
-  putStrLn $ show $ dirContents
+  
   forest <- mapM (getFileNode rootPath relPath) $ filter (\x -> x /= "." && x /= "..") $  dirContents
-  return forest
+  return $ Data.List.sortBy orderDirectoryNodes forest      
+  
+orderDirectoryNodes nodeA nodeB =
+   case (nodeA, nodeB) of 
+     (Node ( Directory _ ) _ , Node (PlainFile _ _) _) ->  LT
+     (Node (PlainFile _ _) _, Node (Directory _) _) -> GT
+     (Node (Directory a) _ , Node (Directory b) _ ) -> Data.Ord.compare a b
+     (Node (PlainFile _ a) _, Node (PlainFile _ b) _) -> Data.Ord.compare a b
+     
 
 getFileNode rootPath relPath filePath = do  
   isDirectory <- Shelly.shelly $ Shelly.test_d $ fromString $ combine rootPath $ combine relPath filePath
@@ -305,8 +310,8 @@ newFileChooser handleChoice = do
     _ <- onFileActivated fch $
         do filePath <- fileChooserGetFilename fch
            case filePath of
-               Just dpath -> do putStrLn dpath
-                                handleChoice dpath
+               Just dpath -> do 
+                                _ <- handleChoice dpath
                                 widgetDestroy window
                Nothing -> return ()
      
