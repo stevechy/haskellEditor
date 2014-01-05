@@ -206,7 +206,10 @@ runCabal editor consoleOut cabalCommand = do
     putStrLn $ show rootPath
     case rootPath of 
        Just rootFilePath -> do 
-           results <- Shelly.shelly $ Shelly.chdir (Shelly.fromText $ fromString rootFilePath) $ Shelly.run (Shelly.fromText $ fromString $ "cabal") [ fromString $ cabalCommand]
+           results <- Shelly.shelly $ Shelly.errExit False $ Shelly.chdir (Shelly.fromText $ fromString rootFilePath) $ do
+               runResults <- Shelly.run (Shelly.fromText $ fromString $ "cabal") [ fromString $ cabalCommand]
+               stdErrResults <- Shelly.lastStderr
+               return $ Data.Text.concat [runResults, stdErrResults]
            textBuf <- textViewGetBuffer consoleOut
 
            let resultString = Data.Text.unpack results
