@@ -16,6 +16,7 @@ import qualified Shelly
 import Data.String
 import qualified Data.List
 import qualified Data.Ord
+import qualified Data.Text
 
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
                                    _fileTreeStore :: TreeStore DirectoryEntry, 
@@ -25,6 +26,9 @@ data EditorWindow = EditorWindow { mainPane:: VPaned,
                                    nextGuiId :: IORef (Int), 
                                    sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer))
                                    }
+
+type EditorInitializer = EditorWindow -> IO ()
+data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
 
 data DirectoryEntry = Directory String | PlainFile String String
 
@@ -43,8 +47,10 @@ main = do
     
     button <- buttonNewWithLabel "Open Project"
     saveButton <- buttonNewWithMnemonic "_Save Files"
+    refreshButton <- buttonNewWithMnemonic "S_ynchronize Folders"
     boxPackStart buttonBar button PackNatural 0
     boxPackStart buttonBar saveButton PackNatural 0
+    boxPackStart buttonBar refreshButton PackNatural 0
     widgetShowAll buttonBar
     
     boxPackStart mainBox buttonBar PackNatural 0
@@ -54,6 +60,7 @@ main = do
     
     onClicked button $ newFileChooser $ loadFile editor
     onClicked saveButton $ saveFiles editor
+    onClicked refreshButton $ refreshFolders editor
     
     onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
     
@@ -148,11 +155,7 @@ makeEditor = do
     panedAdd1 mainVPane mainHBox
     widgetShow mainHBox
     
-    consoleBook <- notebookNew
-    notebookSetTabPos consoleBook PosBottom
-    buttonPage <- hBoxNew False 0
-    notebookAppendPage consoleBook buttonPage "Shortcuts"
-    widgetShow consoleBook
+    ComponentWithInitializer consoleBook consoleBookInitializer <- shortcutPage
     panedAdd2 mainVPane consoleBook
     widgetShow mainVPane
     
@@ -163,7 +166,7 @@ makeEditor = do
     
     guiId <- newIORef 0
     
-    return EditorWindow { mainPane = mainVPane, 
+    let editorWindow =  EditorWindow { mainPane = mainVPane, 
                           _fileTreeView = fileTreeView, 
                           _fileTreeStore = treeStore, 
                           notebook = noteBook, 
@@ -171,6 +174,47 @@ makeEditor = do
                           nextGuiId = guiId,
                           sourceBuffers = buffers
                         } 
+    consoleBookInitializer editorWindow
+    return editorWindow
+
+
+shortcutPage = do
+    consoleBook <- notebookNew
+    notebookSetTabPos consoleBook PosBottom
+    shortcutPane <- vBoxNew False 0
+    buttonPage <- hBoxNew False 0
+    saveButton <- buttonNewWithMnemonic "_Cabal Install"
+    cleanButton <- buttonNewWithMnemonic "_Cabal Clean"
+    runButton <- buttonNewWithMnemonic "_Cabal Run"
+    
+    containerAdd buttonPage saveButton
+    containerAdd buttonPage cleanButton
+    containerAdd buttonPage runButton
+
+    textViewScrolledWindow <- scrolledWindowNew Nothing Nothing    
+    consoleOut <- textViewNew
+    containerAdd textViewScrolledWindow consoleOut
+    boxPackStart shortcutPane buttonPage PackNatural 0
+    boxPackStart shortcutPane textViewScrolledWindow PackGrow 0
+
+    notebookAppendPage consoleBook shortcutPane "Shortcuts"
+    widgetShow consoleBook
+    return $ ComponentWithInitializer consoleBook (\ editor -> onClicked saveButton (runCabal editor consoleOut "install") >> onClicked cleanButton (runCabal editor consoleOut "clean") >> onClicked runButton (runCabal editor consoleOut "run") >> return ())   
+
+runCabal editor consoleOut cabalCommand = do
+    rootPath <- atomically $ readTVar $ _rootPath editor
+    putStrLn $ show rootPath
+    case rootPath of 
+       Just rootFilePath -> do 
+           results <- Shelly.shelly $ Shelly.chdir (Shelly.fromText $ fromString rootFilePath) $ Shelly.run (Shelly.fromText $ fromString $ "cabal") [ fromString $ cabalCommand]
+           textBuf <- textViewGetBuffer consoleOut
+
+           let resultString = Data.Text.unpack results
+           textBufferSetText textBuf resultString
+           return ()
+       Nothing -> return ()
+    return ()
+
 
 parseConfig :: FilePath -> IO (Maybe Configuration.Types.Configuration)
 parseConfig = Data.Yaml.decodeFile
@@ -261,11 +305,18 @@ loadConfiguration editor config filepath = do
   canonicalRootPath <- getCanonicalRootPath config filepath
   
   atomically $ writeTVar (_rootPath editor) $ Just canonicalRootPath  
-  forest <- getDirContentsAsTree canonicalRootPath
-  let fileTreeStore = _fileTreeStore editor 
-  treeStoreClear fileTreeStore  
-  treeStoreInsertForest fileTreeStore [] 0 forest
-  return ()
+  refreshFolders editor
+
+refreshFolders editor = do
+  canonicalRootPathMaybe <- atomically $ readTVar (_rootPath editor) 
+  case canonicalRootPathMaybe of 
+        Just canonicalRootPath -> do
+                                    forest <- getDirContentsAsTree canonicalRootPath
+                                    let fileTreeStore = _fileTreeStore editor 
+                                    treeStoreClear fileTreeStore  
+                                    treeStoreInsertForest fileTreeStore [] 0 forest
+                                    return ()
+        Nothing -> return ()
 
 getCanonicalRootPath config filepath = do
   path <- canonicalizePath filepath
