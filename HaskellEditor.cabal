@@ -19,6 +19,10 @@ executable haskellEditor
                    filepath,
                    stm == 2.4.2,
                    shelly,
+                   pipes,
+                   pipes-bytestring,
+                   bytestring,
+                   transformers,
                    text
 
 

@@ -7,6 +7,7 @@ import Data.Tree
 import Data.Yaml
 import System.Directory
 import System.FilePath
+import System.IO
 import Control.Concurrent.STM
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map as Map
@@ -17,6 +18,11 @@ import Data.String
 import qualified Data.List
 import qualified Data.Ord
 import qualified Data.Text
+import Pipes
+import qualified Pipes.ByteString as P
+import qualified Data.ByteString 
+import qualified Data.ByteString.Lazy
+import Data.Functor.Identity
 
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
                                    _fileTreeStore :: TreeStore DirectoryEntry, 
@@ -199,15 +205,15 @@ shortcutPage = do
 
     notebookAppendPage consoleBook shortcutPane "Shortcuts"
     widgetShow consoleBook
-    return $ ComponentWithInitializer consoleBook (\ editor -> onClicked saveButton (runCabal editor consoleOut "install") >> onClicked cleanButton (runCabal editor consoleOut "clean") >> onClicked runButton (runCabal editor consoleOut "run") >> return ())   
+    return $ ComponentWithInitializer consoleBook (\ editor -> onClicked saveButton (runCabal editor consoleOut ("cabal" , ["install"])) >> onClicked cleanButton (runCabal editor consoleOut ("cabal", ["clean"])) >> onClicked runButton (runCabal editor consoleOut ("cabal", ["run"])) >> return ())   
 
-runCabal editor consoleOut cabalCommand = do
+runCabal editor consoleOut (cabalCommand, cabalArgs) = do
     rootPath <- atomically $ readTVar $ _rootPath editor
     putStrLn $ show rootPath
     case rootPath of 
        Just rootFilePath -> do 
            results <- Shelly.shelly $ Shelly.errExit False $ Shelly.chdir (Shelly.fromText $ fromString rootFilePath) $ do
-               runResults <- Shelly.run (Shelly.fromText $ fromString $ "cabal") [ fromString $ cabalCommand]
+               runResults <- Shelly.run (Shelly.fromText $ fromString $ cabalCommand) (map fromString cabalArgs)
                stdErrResults <- Shelly.lastStderr
                return $ Data.Text.concat [runResults, stdErrResults]
            textBuf <- textViewGetBuffer consoleOut
@@ -221,6 +227,29 @@ runCabal editor consoleOut cabalCommand = do
 
 parseConfig :: FilePath -> IO (Maybe Configuration.Types.Configuration)
 parseConfig = Data.Yaml.decodeFile
+
+parseConfigSpecial :: FilePath ->  IO (Maybe Configuration.Types.Configuration)
+parseConfigSpecial filePath = do
+    lazyContents <- withFile filePath ReadMode $ getFile
+    let strictContents = Data.ByteString.concat $ Data.ByteString.Lazy.toChunks lazyContents
+    case (Data.Yaml.decodeEither' strictContents) of
+        Left parseException -> do
+            putStrLn $ show parseException
+            return Nothing
+        Right configuration -> return $ Just configuration
+    
+
+getFile :: Handle ->  IO (Data.ByteString.Lazy.ByteString)
+getFile handle = do         
+        byteStringVar <- newIORef Data.ByteString.Lazy.empty
+        runEffect $ (P.fromHandle handle) >-> (consumeFile byteStringVar)
+        readIORef byteStringVar 
+
+consumeFile :: IORef (Data.ByteString.Lazy.ByteString) -> Consumer Data.ByteString.ByteString IO ()
+consumeFile byteStringVar = do
+    byteStringChunk <- await
+    lift $ modifyIORef byteStringVar (\ current -> Data.ByteString.Lazy.append current (Data.ByteString.Lazy.fromChunks [byteStringChunk]))
+    consumeFile byteStringVar
 
 addNotebookTab editor title = do
     let noteBook = notebook editor
@@ -291,7 +320,7 @@ addNotebookTab editor title = do
     notebookAppendPageMenu noteBook textViewScrolledWindow tabBar menuLabel
 
 loadConfigFile path = do
-    maybeConfiguration <- parseConfig path    
+    maybeConfiguration <- parseConfigSpecial path    
     return maybeConfiguration
 
 loadFile editor path = do
@@ -301,7 +330,9 @@ loadFile editor path = do
       putStrLn $ show $ config
       loadConfiguration editor config path
       return ()
-    Nothing -> return ()
+    Nothing -> do
+      putStrLn "Parse error"
+      return ()
 
 loadConfiguration editor config filepath = do
   

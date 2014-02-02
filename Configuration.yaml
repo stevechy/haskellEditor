@@ -1,3 +1,5 @@
 rootFolder : .
 cabalFile : Project.cabal
 
+#commands:
+#    - [cabal, install]
