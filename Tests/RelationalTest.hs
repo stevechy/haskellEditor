@@ -47,19 +47,47 @@ accum consumer = \ input seed -> do
     result <- consumer input
     return $ Data.DList.append seed result
 
-directoryContentsRelation :: FilePath -> IOSource FilePath b
-directoryContentsRelation filePath seed consumer = do
-    directoryContents <- getDirectoryContents filePath
-    relationIO (Relation {_relations=directoryContents}) seed consumer 
+directoryContentsRelation :: DirectoryPath -> IOSource DirectoryPath b
+directoryContentsRelation (DirectoryPath filePath nodePath) seed consumer = do
+    let dirPath = filePath ++ "/" ++ nodePath
+    directoryContents <- getDirectoryContents dirPath
+    relationIO (Relation {_relations= map (\nodeName -> DirectoryPath dirPath nodeName) directoryContents}) seed consumer 
 
-data FileNode = PlainFile FilePath | Directory FilePath deriving (Show)
+data DirectoryPath = DirectoryPath String String deriving (Show)
 
-directoryType :: FilePath -> IOSource FileNode b
-directoryType filePath seed consumer = do
-    isDir <- doesDirectoryExist filePath
+data FileNode = PlainFile DirectoryPath | Directory DirectoryPath deriving (Show)
+
+data FileTree = Leaf FileNode | Tree FileNode [FileTree] deriving (Show)
+
+fileNodePath :: FileNode -> DirectoryPath
+fileNodePath (PlainFile path) = path
+fileNodePath (Directory path) = path
+
+
+directoryType :: DirectoryPath -> IOSource FileNode b
+directoryType dirPath@(DirectoryPath rootPath nodePath) seed consumer = do
+    isDir <- doesDirectoryExist (rootPath ++ "/" ++ nodePath)
     if isDir
-        then consumer (Directory filePath) seed
-        else consumer (PlainFile filePath) seed
+        then consumer (Directory dirPath) seed
+        else consumer (PlainFile dirPath) seed
+
+flatDirectoryContents :: DirectoryPath -> IOSource FileNode b
+flatDirectoryContents dirPath seed consumer = applySeed seed $ selectPipe (directoryContentsRelation dirPath) $ \ filePath -> 
+                                                    selectPipe (directoryType filePath) $ consumer
+
+fileTree :: DirectoryPath -> IO( Data.DList.DList FileTree )
+fileTree dirPath = applySeed emptySeed $ select (flatDirectoryContents dirPath) $ \fileNode ->
+                                           if traversable fileNode
+                                                 then do 
+                                                           subTrees <- fileTree (fileNodePath fileNode)
+                                                           return $ having True $ (Tree fileNode (Data.DList.toList subTrees)) 
+                                                 else return $ having True $ (Leaf fileNode) 
+
+traversable :: FileNode -> Bool
+traversable (PlainFile _) = False
+traversable (Directory (DirectoryPath _ ".")) = False
+traversable (Directory (DirectoryPath _ "..")) = False
+traversable (Directory (DirectoryPath _ _ )) = True
 
 readFileRelation :: IOSource String b
 readFileRelation seed consumer = withFile "LICENSE" ReadMode (readFileStep seed consumer)
@@ -104,30 +132,53 @@ showDlist list = show $ Data.DList.toList list
 tests :: Test
 tests = TestList [
         TestLabel "SimpleTest" $ TestCase $ do 
-            assertEqual "Stuff" 1 1
+            assertEqual "Stuff"  "a" "a"
         ,TestLabel "Should Query Relationally" $ TestCase $ do 
             x <- relationIOTest emptySeed
             putStrLn $ showDlist x
-            assertEqual "Stuff" 1 1
+            assertEqual "Stuff"  "a" "a"
         ,TestLabel "Should Query File" $ TestCase $ do
             fileRelations <- readFileRelation emptySeed (\ line seed  -> return (Data.DList.snoc seed line) ) 
             putStrLn $ showDlist $ fileRelations
-            assertEqual "Queried file" 1 1
+            assertEqual "Queried file"  "a" "a"
         ,TestLabel "Should Query File" $ TestCase $ do
             fileRelations <- readFileRelation emptySeed (\ line seed  -> return $ (sat seed (length line <= 10) line) )  
             putStrLn $ showDlist $ fileRelations
-            assertEqual "Queried file" 1 1
+            assertEqual "Queried file" "a" "a"
         ,TestLabel "Should Query Dir" $ TestCase $ do
-            dirRelations <- directoryContentsRelation "Tests" emptySeed (\filePath seed  -> return $ Data.DList.snoc seed filePath)
+            dirRelations <- directoryContentsRelation (DirectoryPath "." "Tests") emptySeed (\filePath seed  -> return $ Data.DList.snoc seed filePath)
             putStrLn $ showDlist $ dirRelations
-            assertEqual "Queried Dir" 1 1
+            assertEqual "Queried Dir" "a" "a"
         ,TestLabel "Should Show Dir types " $ TestCase $ do
-            let dirTypes = selectPipe (directoryContentsRelation "Tests") $ \filePath ->
+            let dirTypes = selectPipe (directoryContentsRelation (DirectoryPath "." "Tests")) $ \filePath ->
                                select (directoryType filePath) $ \fileNode ->
                                return $ having True fileNode
             dirRelations <- dirTypes emptySeed
+            putStrLn $ ""
             putStrLn $ showDlist $ dirRelations
-            assertEqual "Queried Dir" 1 1
+            assertEqual "Queried Dir" "a" "a"
+        ,TestLabel "Should Recursively traverse dir " $ TestCase $ do
+            let dirTypes = selectPipe (directoryContentsRelation (DirectoryPath "." "sandbox")) $ \filePath ->
+                               selectPipe (directoryType filePath) $ \fileNode ->
+                               if traversable fileNode
+                                   then selectPipe (directoryContentsRelation (fileNodePath fileNode)) $ \ secondFilePath ->
+                                             select (directoryType secondFilePath) $ \secondFileNode -> return $ having True secondFileNode
+                                   else \list -> return $ Data.DList.snoc list fileNode
+            dirRelations <- dirTypes emptySeed
+            putStrLn $ ""
+            putStrLn $ showDlist $ dirRelations
+            assertEqual "Queried Dir" "a" "a"
+       , TestLabel "Flat dir types"  $ TestCase $ do
+            let dirTypes = select (flatDirectoryContents (DirectoryPath "." "sandbox")) $ \ fileNode -> return $ having True fileNode
+            dirRelations <- dirTypes emptySeed
+            putStrLn $ ""
+            putStrLn $ showDlist $ dirRelations
+            assertEqual "Queried Dir" "a" "a"
+       , TestLabel "Flat dir types"  $ TestCase $ do
+            dirRelations <- fileTree (DirectoryPath "." "sandbox")
+            putStrLn $ ""
+            putStrLn $ showDlist $ dirRelations
+            assertEqual "Queried Dir" "a" "a"
     ]
 
 main :: IO()
