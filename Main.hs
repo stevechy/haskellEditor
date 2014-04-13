@@ -24,6 +24,8 @@ import qualified Data.ByteString
 import qualified Data.ByteString.Lazy
 import Data.Functor.Identity
 
+import qualified HaskellEditor.Relational
+
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
                                    _fileTreeStore :: TreeStore DirectoryEntry, 
                                    _fileTreeView:: TreeView, 

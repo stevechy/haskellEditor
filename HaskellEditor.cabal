@@ -7,7 +7,7 @@ cabal-version: >= 1.2
 
 executable haskellEditor
     main-is: Main.hs
-    ghc-options: -Wall
+    ghc-options: -Wall -fwarn-incomplete-patterns
     build-depends: base >= 4.3.0.0,
                    gtk == 0.12.4,
                    gtksourceview2,
@@ -23,6 +23,11 @@ executable haskellEditor
                    pipes-bytestring,
                    bytestring,
                    transformers,
-                   text
+                   text,
+                   dlist
 
+executable haskellEditorTest
+    main-is: Tests/RelationalTest.hs
+    ghc-options: -Wall -fwarn-incomplete-patterns
+    build-depends: HUnit
 
