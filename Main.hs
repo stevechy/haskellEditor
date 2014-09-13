@@ -3,7 +3,6 @@ import Graphics.UI.Gtk.SourceView.SourceView
 import Graphics.UI.Gtk.SourceView.SourceBuffer
 import Graphics.UI.Gtk.SourceView.SourceLanguageManager
 import Configuration.Types
-import Data.Tree
 import Data.Yaml
 import System.Directory
 import System.FilePath
@@ -12,30 +11,23 @@ import Control.Concurrent.STM
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map as Map
 import Data.IORef
-import Control.Monad
-import qualified Shelly
-import Data.String
-
-import qualified Data.List
-import qualified Data.Ord
-import qualified Data.Text
 import qualified Data.ByteString 
 import qualified Data.ByteString.Lazy
-import Data.Functor.Identity
 
 import HaskellEditor.Files
 import HaskellEditor.Types
+import HaskellEditor.ShellExecution
 
-type EditorInitializer = EditorWindow -> IO ()
+
 data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
 
 
-
+languageFileExtensions :: Map.Map [Char] [Char]
 languageFileExtensions = Map.fromList [(".hs", "haskell")]
 
 main :: IO ()
 main = do
-    initGUI
+    _ <- initGUI
     window <- windowNew
     set window [windowDefaultWidth := 800, windowDefaultHeight := 600]
     
@@ -57,23 +49,23 @@ main = do
     editor <- makeEditor
     
     
-    onClicked button $ newFileChooser $ loadFile editor
-    onClicked saveButton $ saveFiles editor
-    onClicked refreshButton $ refreshFolders editor
+    _ <- onClicked button $ newFileChooser $ loadFile editor
+    _ <- onClicked saveButton $ saveFiles editor
+    _ <- onClicked refreshButton $ refreshFolders editor
     
-    onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
+    _ <- onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
     
     boxPackStart mainBox (mainPane editor) PackGrow 0
              
 
-    onDestroy window mainQuit
+    _ <- onDestroy window mainQuit
     widgetShowAll button    
     widgetShowAll mainBox
     widgetShowAll window
     mainGUI
     
 
-    
+openFileChooserFile :: EditorWindow -> TreePath -> t -> IO ()    
 openFileChooserFile editor treePath treeViewColumn = 
   do
     let treeStore = _fileTreeStore editor
@@ -84,11 +76,13 @@ openFileChooserFile editor treePath treeViewColumn =
         widgetQueueDraw (notebook editor)
       _ -> return ()
     return ()
-    
+
+fileLabelRenderer :: CellRendererTextClass o => DirectoryEntry -> [AttrOp o]    
 fileLabelRenderer label = case label of
   Directory directory -> [cellText := directory]
   PlainFile file _ ->  [cellText := file]
 
+iconLabelRenderer :: CellRendererPixbufClass o => DirectoryEntry -> [AttrOp o]
 iconLabelRenderer label = case label of
   Directory directory -> [cellPixbufStockId := stockDirectory]
   _ -> [cellPixbufStockId := stockFile]
@@ -96,6 +90,7 @@ iconLabelRenderer label = case label of
 fileTreeStoreNew :: IO (TreeStore DirectoryEntry)
 fileTreeStoreNew = treeStoreNew []
 
+makeEditor :: IO EditorWindow
 makeEditor = do
     mainVPane <- vPanedNew
     
@@ -119,7 +114,7 @@ makeEditor = do
     cellLayoutSetAttributes treeViewColumn cellRenderer treeStore fileLabelRenderer
     cellLayoutSetAttributes treeViewColumn typePix treeStore iconLabelRenderer
     
-    treeViewAppendColumn fileTreeView treeViewColumn
+    _ <- treeViewAppendColumn fileTreeView treeViewColumn
     Just maybeColumn <- treeViewGetColumn fileTreeView 0
 
     containerAdd fileTreeScrolledWindow fileTreeView
@@ -157,7 +152,7 @@ makeEditor = do
     consoleBookInitializer editorWindow
     return editorWindow
 
-
+shortcutPage :: IO (ComponentWithInitializer Notebook)
 shortcutPage = do
     consoleBook <- notebookNew
     notebookSetTabPos consoleBook PosBottom
@@ -177,30 +172,11 @@ shortcutPage = do
     boxPackStart shortcutPane buttonPage PackNatural 0
     boxPackStart shortcutPane textViewScrolledWindow PackGrow 0
 
-    notebookAppendPage consoleBook shortcutPane "Shortcuts"
+    _ <- notebookAppendPage consoleBook shortcutPane "Shortcuts"
     widgetShow consoleBook
     return $ ComponentWithInitializer consoleBook (\ editor -> onClicked saveButton (runCabal editor consoleOut ("cabal" , ["install"])) >> onClicked cleanButton (runCabal editor consoleOut ("cabal", ["clean"])) >> onClicked runButton (runCabal editor consoleOut ("cabal", ["run"])) >> return ())   
 
-runCabal editor consoleOut (cabalCommand, cabalArgs) = do
-    rootPath <- atomically $ readTVar $ _rootPath editor
-    putStrLn $ show rootPath
-    case rootPath of 
-       Just rootFilePath -> do 
-           results <- Shelly.shelly $ Shelly.errExit False $ Shelly.chdir (Shelly.fromText $ fromString rootFilePath) $ do
-               runResults <- Shelly.run (Shelly.fromText $ fromString $ cabalCommand) (map fromString cabalArgs)
-               stdErrResults <- Shelly.lastStderr
-               return $ Data.Text.concat [runResults, stdErrResults]
-           textBuf <- textViewGetBuffer consoleOut
 
-           let resultString = Data.Text.unpack results
-           textBufferSetText textBuf resultString
-           return ()
-       Nothing -> return ()
-    return ()
-
-
-parseConfig :: FilePath -> IO (Maybe Configuration.Types.Configuration)
-parseConfig = Data.Yaml.decodeFile
 
 parseConfigSpecial :: FilePath ->  IO (Maybe Configuration.Types.Configuration)
 parseConfigSpecial filePath = do
@@ -262,7 +238,7 @@ addNotebookTab editor title = do
     buttonSetRelief tabClose ReliefNone
     buttonSetFocusOnClick tabClose False
     
-    onClicked tabClose $ do 
+    _ <- onClicked tabClose $ do 
       pageNumberMaybe <- notebookPageNum noteBook textViewScrolledWindow
       case pageNumberMaybe of
         Just pageNumber -> do
@@ -278,16 +254,18 @@ addNotebookTab editor title = do
     
     widgetShowAll tabBar
     
-    let labelText :: Maybe String
-        labelText = Nothing
-    menuLabel <- labelNew labelText
+    let menuLabelText :: Maybe String
+        menuLabelText = Nothing
+    menuLabel <- labelNew menuLabelText
     
     notebookAppendPageMenu noteBook textViewScrolledWindow tabBar menuLabel
 
+loadConfigFile :: FilePath -> IO (Maybe Configuration)
 loadConfigFile path = do
     maybeConfiguration <- parseConfigSpecial path    
     return maybeConfiguration
 
+loadFile :: EditorWindow -> FilePath -> IO ()
 loadFile editor path = do
   configuration <- loadConfigFile path
   case configuration of
@@ -299,6 +277,7 @@ loadFile editor path = do
       putStrLn "Parse error"
       return ()
 
+loadConfiguration :: EditorWindow -> Configuration -> FilePath -> IO ()
 loadConfiguration editor config filepath = do
   
   canonicalRootPath <- getCanonicalRootPath config filepath
@@ -306,6 +285,7 @@ loadConfiguration editor config filepath = do
   atomically $ writeTVar (_rootPath editor) $ Just canonicalRootPath  
   refreshFolders editor
 
+refreshFolders :: EditorWindow -> IO ()
 refreshFolders editor = do
   canonicalRootPathMaybe <- atomically $ readTVar (_rootPath editor) 
   case canonicalRootPathMaybe of 
@@ -317,38 +297,14 @@ refreshFolders editor = do
                                     return ()
         Nothing -> return ()
 
+getCanonicalRootPath :: Configuration -> FilePath -> IO FilePath
 getCanonicalRootPath config filepath = do
   path <- canonicalizePath filepath
   let rootPath = combine (dropFileName path) $ rootFolder config
   canonicalRootPath <- canonicalizePath rootPath
   return canonicalRootPath
-  
-getDirContentsAsTree rootPath = getDirContentsAsTreeWithRelpath rootPath "."
-  
-getDirContentsAsTreeWithRelpath rootPath relPath = do
-  dirContents <- getDirectoryContents (combine rootPath relPath)
-  
-  forest <- mapM (getFileNode rootPath relPath) $ filter (\x -> x /= "." && x /= "..") $  dirContents
-  return $ Data.List.sortBy orderDirectoryNodes forest      
-  
-orderDirectoryNodes nodeA nodeB =
-   case (nodeA, nodeB) of 
-     (Node ( Directory _ ) _ , Node (PlainFile _ _) _) ->  LT
-     (Node (PlainFile _ _) _, Node (Directory _) _) -> GT
-     (Node (Directory a) _ , Node (Directory b) _ ) -> Data.Ord.compare a b
-     (Node (PlainFile _ a) _, Node (PlainFile _ b) _) -> Data.Ord.compare a b
-     
 
-getFileNode rootPath relPath filePath = do  
-  isDirectory <- Shelly.shelly $ Shelly.test_d $ fromString $ combine rootPath $ combine relPath filePath
-  
-  if isDirectory 
-    then do
-         subDirectories <- getDirContentsAsTreeWithRelpath rootPath (combine relPath filePath)
-         return Node { rootLabel = Directory filePath, subForest = subDirectories } 
-    else return (Node { rootLabel = PlainFile filePath (combine relPath filePath), subForest = [] })
-  
-
+newFileChooser ::  (FilePath -> IO t) -> IO ()
 newFileChooser handleChoice = do
     window <- windowNew
     set window [windowDefaultWidth := 800, windowDefaultHeight := 600]
@@ -357,7 +313,7 @@ newFileChooser handleChoice = do
 
     containerAdd window fch
 
-    _ <- onFileActivated fch $
+    _ <- on fch fileActivated  $
         do filePath <- fileChooserGetFilename fch
            case filePath of
                Just dpath -> do 

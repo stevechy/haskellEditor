@@ -19,3 +19,4 @@ data EditorWindow = EditorWindow { mainPane:: VPaned,
                                    sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer))
                                    }
 
+type EditorInitializer = EditorWindow -> IO ()
