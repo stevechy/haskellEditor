@@ -20,10 +20,18 @@ personRelation = Relation { _relations = [ Person { _name = "Alice", _age = 30, 
 countryRelation = Relation { _relations = [ Country { _countryCode = "CA", _countryName = "Canada"}, Country { _countryCode = "US", _countryName = "United States"} ]}
 
 
+
+
 type SeedConsumer b = Data.DList.DList b -> IO (Data.DList.DList b)
 type IOConsumer a b = a -> IO (Data.DList.DList b)
 type IOAccumulator a b = a -> SeedConsumer b
 type IOSource a b = Data.DList.DList b -> IOAccumulator a b-> IO (Data.DList.DList b)
+
+data RelationMonad b a = RelationMonad { source ::  (a -> b) -> b  }
+
+instance Monad (RelationMonad b) where
+    return x = RelationMonad { source = \ accum -> accum x}
+    relationMonad >>= f = RelationMonad { source =  \accum -> (source relationMonad) (\input -> (source (f input)) accum) }
 
 relationIO :: Relation a -> IOSource a b
 relationIO relation seed consumer = foldM (\seed input -> consumer input seed) seed (_relations relation) 
@@ -31,6 +39,9 @@ relationIO relation seed consumer = foldM (\seed input -> consumer input seed) s
 selectIO :: IOSource a b -> Data.DList.DList b -> IOAccumulator a b -> IO ( Data.DList.DList b )
 selectIO ioSource seed consumer = do
     ioSource seed consumer
+
+selectM :: IOSource a b -> RelationMonad (Data.DList.DList b -> IO (Data.DList.DList b)) a
+selectM src = RelationMonad { source = (\accum seed -> src seed accum )}
 
 select :: IOSource a b -> IOConsumer a b -> SeedConsumer b
 select source consumer = selectPipe source (accum consumer)
@@ -74,6 +85,18 @@ directoryType dirPath@(DirectoryPath rootPath nodePath) seed consumer = do
 flatDirectoryContents :: DirectoryPath -> IOSource FileNode b
 flatDirectoryContents dirPath seed consumer = applySeed seed $ selectPipe (directoryContentsRelation dirPath) $ \ filePath -> 
                                                     selectPipe (directoryType filePath) $ consumer
+
+monadFlatDirectoryContents dirPath = do
+    filePath <- selectM (directoryContentsRelation dirPath)
+    return filePath 
+
+dirContents dirPath = do
+    filePath <- selectM (directoryContentsRelation dirPath)
+    fileNode <- selectM (directoryType filePath)
+    return fileNode
+
+runMonad :: RelationMonad (Data.DList.DList b -> IO (Data.DList.DList b)) b -> IO (Data.DList.DList b)
+runMonad relationMonad = ((source relationMonad) (\ input seed -> return $ Data.DList.snoc seed input)) Data.DList.empty
 
 fileTree :: DirectoryPath -> IO( Data.DList.DList FileTree )
 fileTree dirPath = applySeed emptySeed $ select (flatDirectoryContents dirPath) $ \fileNode ->
@@ -179,6 +202,11 @@ tests = TestList [
             putStrLn $ ""
             putStrLn $ showDlist $ dirRelations
             assertEqual "Queried Dir" "a" "a"
+       , TestLabel "Monad"  $ TestCase $ do
+            dirRelations <- runMonad $ dirContents (DirectoryPath "." "sandbox")
+            putStrLn $ ""
+            putStrLn $ showDlist $ dirRelations
+            assertEqual "Queried DirMonad" "a" "a"
     ]
 
 main :: IO()

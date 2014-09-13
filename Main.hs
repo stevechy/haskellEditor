@@ -15,30 +15,21 @@ import Data.IORef
 import Control.Monad
 import qualified Shelly
 import Data.String
+
 import qualified Data.List
 import qualified Data.Ord
 import qualified Data.Text
-import Pipes
-import qualified Pipes.ByteString as P
 import qualified Data.ByteString 
 import qualified Data.ByteString.Lazy
 import Data.Functor.Identity
 
-import qualified HaskellEditor.Relational
-
-data EditorWindow = EditorWindow { mainPane:: VPaned, 
-                                   _fileTreeStore :: TreeStore DirectoryEntry, 
-                                   _fileTreeView:: TreeView, 
-                                   notebook :: Notebook, 
-                                   _rootPath :: TVar (Maybe FilePath),                                    
-                                   nextGuiId :: IORef (Int), 
-                                   sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer))
-                                   }
+import HaskellEditor.Files
+import HaskellEditor.Types
 
 type EditorInitializer = EditorWindow -> IO ()
 data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
 
-data DirectoryEntry = Directory String | PlainFile String String
+
 
 languageFileExtensions = Map.fromList [(".hs", "haskell")]
 
@@ -81,26 +72,7 @@ main = do
     widgetShowAll window
     mainGUI
     
-saveFiles editor = do    
-  buffers <- atomically $ readTVar $ sourceBuffers editor
-  rootPathMaybe <- atomically $ readTVar $ _rootPath editor
-  case rootPathMaybe of       
-    Just rootPath -> do
-      saveBuffers rootPath buffers
-      return ()
-    Nothing -> return ()
-  return ()
 
-saveBuffers rootPath buffers = do
-  forM 
-    (IntMap.elems buffers) 
-    (\ (fileName, buffer) -> do 
-        startIter <- textBufferGetStartIter buffer
-        endIter <- textBufferGetEndIter buffer
-        text <- textBufferGetText buffer startIter endIter True       
-        writeFile (combine rootPath fileName) text
-        return ()
-    )
     
 openFileChooserFile editor treePath treeViewColumn = 
   do
@@ -241,18 +213,7 @@ parseConfigSpecial filePath = do
         Right configuration -> return $ Just configuration
     
 
-getFile :: Handle ->  IO (Data.ByteString.Lazy.ByteString)
-getFile handle = do         
-        byteStringVar <- newIORef Data.ByteString.Lazy.empty
-        runEffect $ (P.fromHandle handle) >-> (consumeFile byteStringVar)
-        readIORef byteStringVar 
-
-consumeFile :: IORef (Data.ByteString.Lazy.ByteString) -> Consumer Data.ByteString.ByteString IO ()
-consumeFile byteStringVar = do
-    byteStringChunk <- await
-    lift $ modifyIORef byteStringVar (\ current -> Data.ByteString.Lazy.append current (Data.ByteString.Lazy.fromChunks [byteStringChunk]))
-    consumeFile byteStringVar
-
+addNotebookTab :: EditorWindow -> String -> IO (Int)
 addNotebookTab editor title = do
     let noteBook = notebook editor
     textViewScrolledWindow <- scrolledWindowNew Nothing Nothing
@@ -317,7 +278,9 @@ addNotebookTab editor title = do
     
     widgetShowAll tabBar
     
-    menuLabel <- labelNew Nothing
+    let labelText :: Maybe String
+        labelText = Nothing
+    menuLabel <- labelNew labelText
     
     notebookAppendPageMenu noteBook textViewScrolledWindow tabBar menuLabel
 
