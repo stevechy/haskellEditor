@@ -2,28 +2,45 @@ import Graphics.UI.Gtk
 import Graphics.UI.Gtk.SourceView.SourceView
 import Graphics.UI.Gtk.SourceView.SourceBuffer
 import Graphics.UI.Gtk.SourceView.SourceLanguageManager
-import Configuration.Types
-import Data.Yaml
+
 import System.Directory
 import System.FilePath
-import System.IO
 import Control.Concurrent.STM
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map as Map
 import Data.IORef
-import qualified Data.ByteString 
-import qualified Data.ByteString.Lazy
 
 import HaskellEditor.Files
 import HaskellEditor.Types
 import HaskellEditor.ShellExecution
+import HaskellEditor.Configuration
+import HaskellEditor.Configuration.Types
+import qualified HaskQuery
 
 
 data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
 
+data Named a = Named { _widgetName :: String, _widget :: a}
+data Widgets = Widgets { buttons :: HaskQuery.Relation (Named Button) () }
+
+emptyWidgets = Widgets{ buttons = HaskQuery.empty }
 
 languageFileExtensions :: Map.Map [Char] [Char]
 languageFileExtensions = Map.fromList [(".hs", "haskell")]
+
+makeButtons :: Widgets -> IO (Widgets)
+makeButtons widgets = do
+    button <- named "openProjectButton" $ buttonNewWithLabel "Open Project"
+  
+    saveButton <- named "saveProjectButton" $ buttonNewWithMnemonic "_Save Files"
+   
+    refreshButton <- named "refreshProjectButton" $ buttonNewWithMnemonic "S_ynchronize Folders"
+    return widgets { buttons = HaskQuery.insertRows (buttons widgets) [button, saveButton, refreshButton]} 
+
+named :: String -> IO a -> IO (Named a)
+named name computation = do
+    value <- computation
+    return Named {_widgetName = name, _widget =value }
 
 main :: IO ()
 main = do
@@ -36,30 +53,40 @@ main = do
 
     buttonBar <- hBoxNew False 0
     
-    button <- buttonNewWithLabel "Open Project"
-    saveButton <- buttonNewWithMnemonic "_Save Files"
-    refreshButton <- buttonNewWithMnemonic "S_ynchronize Folders"
-    boxPackStart buttonBar button PackNatural 0
-    boxPackStart buttonBar saveButton PackNatural 0
-    boxPackStart buttonBar refreshButton PackNatural 0
+    widgets <- makeButtons emptyWidgets
+
+    _ <- HaskQuery.runQueryM $ do
+        namedButton <- HaskQuery.selectM (buttons widgets) 
+        _ <- HaskQuery.executeM (boxPackStart buttonBar (_widget namedButton) PackNatural 0)
+        return ()
+    
     widgetShowAll buttonBar
     
     boxPackStart mainBox buttonBar PackNatural 0
           
-    editor <- makeEditor
-    
-    
-    _ <- onClicked button $ newFileChooser $ loadFile editor
-    _ <- onClicked saveButton $ saveFiles editor
-    _ <- onClicked refreshButton $ refreshFolders editor
-    
+    editor <- makeEditor  
+
+    let buttonCallbacks :: HaskQuery.Relation (Named (Named (Button) -> IO (ConnectId Button)) ) ()
+        buttonCallbacks = HaskQuery.insertRows HaskQuery.empty [
+            Named { _widgetName = "openProjectButton", _widget = (\namedButton -> onClicked (_widget namedButton) $ newFileChooser $ loadFile editor)},
+            Named { _widgetName = "saveProjectButton", _widget = (\namedButton -> onClicked (_widget namedButton) $ saveFiles editor)},
+            Named { _widgetName = "refreshProjectButton", _widget = (\namedButton -> onClicked (_widget namedButton) $ refreshFolders editor)}
+            ]    
+
+    _ <- HaskQuery.runQueryM $ do
+        namedButton <- HaskQuery.selectM (buttons widgets) 
+        callback <- HaskQuery.selectM buttonCallbacks
+        _ <- HaskQuery.filterM $ ((_widgetName callback) == (_widgetName namedButton))
+        _ <- HaskQuery.executeM $ (_widget callback) namedButton
+        return ()
+
     _ <- onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
     
     boxPackStart mainBox (mainPane editor) PackGrow 0
              
 
     _ <- onDestroy window mainQuit
-    widgetShowAll button    
+    --widgetShowAll button    
     widgetShowAll mainBox
     widgetShowAll window
     mainGUI
@@ -138,6 +165,7 @@ makeEditor = do
     
     filePath <- atomically $ newTVar Nothing
     buffers <- atomically $ newTVar IntMap.empty
+    propertyRelation <- atomically $ newTVar HaskQuery.empty
     
     guiId <- newIORef 0
     
@@ -147,7 +175,8 @@ makeEditor = do
                           notebook = noteBook, 
                           _rootPath = filePath, 
                           nextGuiId = guiId,
-                          sourceBuffers = buffers
+                          sourceBuffers = buffers,
+                          _properties = propertyRelation
                         } 
     consoleBookInitializer editorWindow
     return editorWindow
@@ -178,16 +207,7 @@ shortcutPage = do
 
 
 
-parseConfigSpecial :: FilePath ->  IO (Maybe Configuration.Types.Configuration)
-parseConfigSpecial filePath = do
-    lazyContents <- withFile filePath ReadMode $ getFile
-    let strictContents = Data.ByteString.concat $ Data.ByteString.Lazy.toChunks lazyContents
-    case (Data.Yaml.decodeEither' strictContents) of
-        Left parseException -> do
-            putStrLn $ show parseException
-            return Nothing
-        Right configuration -> return $ Just configuration
-    
+
 
 addNotebookTab :: EditorWindow -> String -> IO (Int)
 addNotebookTab editor title = do
@@ -260,10 +280,7 @@ addNotebookTab editor title = do
     
     notebookAppendPageMenu noteBook textViewScrolledWindow tabBar menuLabel
 
-loadConfigFile :: FilePath -> IO (Maybe Configuration)
-loadConfigFile path = do
-    maybeConfiguration <- parseConfigSpecial path    
-    return maybeConfiguration
+
 
 loadFile :: EditorWindow -> FilePath -> IO ()
 loadFile editor path = do
@@ -274,7 +291,9 @@ loadFile editor path = do
       loadConfiguration editor config path
       return ()
     Nothing -> do
-      putStrLn "Parse error"
+      messageDialog <- messageDialogNew Nothing [DialogModal] MessageError ButtonsOk "The selected file was not a propery Configuration.yaml file"
+      _ <- dialogRun messageDialog
+      widgetDestroy messageDialog
       return ()
 
 loadConfiguration :: EditorWindow -> Configuration -> FilePath -> IO ()
@@ -282,7 +301,9 @@ loadConfiguration editor config filepath = do
   
   canonicalRootPath <- getCanonicalRootPath config filepath
   
-  atomically $ writeTVar (_rootPath editor) $ Just canonicalRootPath  
+  atomically $ do 
+      writeTVar (_rootPath editor) $ Just canonicalRootPath  
+      modifyTVar (_properties editor) $ (\properties -> HaskQuery.insert properties (ConfigurationProperty { _name = "rootPath", _value = canonicalRootPath}))
   refreshFolders editor
 
 refreshFolders :: EditorWindow -> IO ()

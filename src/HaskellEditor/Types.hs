@@ -7,8 +7,11 @@ import Graphics.UI.Gtk
 import Graphics.UI.Gtk.SourceView.SourceBuffer
 import qualified Data.IntMap.Strict as IntMap
 import Data.IORef
+import qualified HaskQuery
 
 data DirectoryEntry = Directory String | PlainFile String String
+
+data ConfigurationProperty = ConfigurationProperty { _name :: String, _value :: String }
 
 data EditorWindow = EditorWindow { mainPane:: VPaned, 
                                    _fileTreeStore :: TreeStore DirectoryEntry, 
@@ -16,7 +19,8 @@ data EditorWindow = EditorWindow { mainPane:: VPaned,
                                    notebook :: Notebook, 
                                    _rootPath :: TVar (Maybe FilePath),                                    
                                    nextGuiId :: IORef (Int), 
-                                   sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer))
+                                   sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer)),
+                                   _properties :: TVar (HaskQuery.Relation ConfigurationProperty ())
                                    }
 
 type EditorInitializer = EditorWindow -> IO ()

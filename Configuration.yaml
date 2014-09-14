@@ -1,5 +1,7 @@
 rootFolder : .
 cabalFile : Project.cabal
+projectName : HaskellEditor
 
+#comment
 #commands:
 #    - [cabal, install]

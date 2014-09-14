@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 
-module Configuration.Types where
+module HaskellEditor.Configuration.Types where
 
 import GHC.Generics (Generic)
 import Data.Aeson (FromJSON, ToJSON)
