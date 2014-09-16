@@ -2,6 +2,7 @@ module HaskQuery (
 module HaskQuery.AutoIndex, 
 Relation,
 empty,
+emptyWithIndex,
 reindex,
 runQuery,
 select,
@@ -11,6 +12,7 @@ selectM,
 filterM,
 selectWithIndex,
 selectDynamic,
+selectDynamicWithTypeM,
 insert,
 insertRows,
 insertInto,
@@ -23,6 +25,7 @@ import qualified Data.List
 import qualified Control.Monad.Trans.Cont
 import qualified Data.Typeable
 import qualified Data.Dynamic
+import qualified Data.Proxy
 
 import HaskQuery.AutoIndex
 
@@ -30,6 +33,9 @@ data Relation a b = Relation { _relation :: Data.IntMap.Lazy.IntMap a , _lastRow
 
 empty :: Relation a ()
 empty = Relation { _relation = Data.IntMap.Lazy.empty, _lastRowId = 0, _indices = emptyIndex }
+
+emptyWithIndex :: UpdatableIndex a c -> Relation a c
+emptyWithIndex index = reindex empty index
 
 reindex :: Relation a b -> UpdatableIndex a c -> Relation a c
 reindex indexedRelation newIndex =
@@ -64,6 +70,13 @@ selectWithIndex indexAccessor relation indexValue = do
 
 selectDynamic :: (Data.Typeable.Typeable a) => Data.Dynamic.Dynamic -> Control.Monad.Trans.Cont.Cont (b->b) a
 selectDynamic value = Control.Monad.Trans.Cont.cont (\continuation -> (case Data.Dynamic.fromDynamic value of Just typed -> continuation typed ; Nothing -> id))
+
+selectDynamicWithType :: (Data.Typeable.Typeable a) => Data.Proxy.Proxy a -> Data.Dynamic.Dynamic -> Control.Monad.Trans.Cont.Cont (b->b) a
+selectDynamicWithType proxy value = selectDynamic value
+
+selectDynamicWithTypeM :: (Data.Typeable.Typeable a, Monad m) => Data.Proxy.Proxy a -> Data.Dynamic.Dynamic -> Control.Monad.Trans.Cont.Cont (b->m b) a
+selectDynamicWithTypeM proxy value = Control.Monad.Trans.Cont.cont (\continuation -> (\seed -> (case Data.Dynamic.fromDynamic value of Just typed -> continuation typed seed ; Nothing -> return seed)))
+
 
 insert :: Relation a b -> a -> Relation a b
 insert indexedRelation item = 
