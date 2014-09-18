@@ -28,12 +28,6 @@ languageFileExtensions :: Map.Map [Char] [Char]
 languageFileExtensions = Map.fromList [(".hs", "haskell")]
 
 
-
-
-
-
-
-
 main :: IO ()
 main = do
     _ <- initGUI
@@ -276,7 +270,9 @@ addNotebookTab editor title = do
 
 loadFile :: EditorWindow -> FilePath -> IO ()
 loadFile editor path = do
-  configuration <- loadConfigFile path
+  configuration <- if (takeExtension path) == ".cabal"
+                        then return $ Just $ Configuration { rootFolder =".", cabalFile = takeFileName path, commands = Nothing }
+                        else loadConfigFile path
   case configuration of
     Just config -> do
       putStrLn $ show $ config
