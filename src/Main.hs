@@ -15,11 +15,10 @@ import HaskellEditor.Types
 import HaskellEditor.ShellExecution
 import HaskellEditor.Configuration
 import HaskellEditor.Configuration.Types
-import HaskellEditor.Dynamic
+import HaskellEditor.Dynamic()
+import HaskellEditor.Gui.Components
 import qualified HaskQuery
-import Data.Dynamic
-import qualified Control.Monad.Trans.Cont
-import Data.Proxy
+
 
 data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
 
@@ -28,103 +27,57 @@ data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
 languageFileExtensions :: Map.Map [Char] [Char]
 languageFileExtensions = Map.fromList [(".hs", "haskell")]
 
-makeButtons :: IO (Widgets)
-makeButtons = do
-    button <- fmap (namedDynamic "openProjectButton") $ buttonNewWithLabel "Open Project"
-  
-    saveButton <- fmap (namedDynamic "saveProjectButton") $ buttonNewWithMnemonic "_Save Files"
-   
-    refreshButton <- fmap (namedDynamic "refreshProjectButton") $ buttonNewWithMnemonic "S_ynchronize Folders"
-    return emptyWidgets { _widgets = HaskQuery.insertRows (_widgets emptyWidgets) [button, saveButton, refreshButton]} 
-
-named :: String -> IO a -> IO (Named a)
-named name computation = do
-    value <- computation
-    return Named {_identifier = name, _content =value }
-
-namedDynamic :: Typeable a => String -> a -> Named Dynamic
-namedDynamic name value = Named {_identifier = name, _content = toDyn value }
 
 
 
-createMainWindow :: TVar (Widgets) -> IO()
-createMainWindow widgetTVar = do
-    window <- windowNew
-    set window [windowDefaultWidth := 800, windowDefaultHeight := 600]
-    _ <- onDestroy window mainQuit 
-      
 
-    atomically $ do
-        modifyTVar widgetTVar (\currentWidget -> currentWidget { _widgets = HaskQuery.insert (_widgets currentWidget) $ namedDynamic "mainWindow" window} )   
-    return () 
+
+
 
 main :: IO ()
 main = do
     _ <- initGUI
     widgetTVar <- atomically $ newTVar emptyWidgets
+
+    editor <- makeEditor widgetTVar 
     createMainWindow widgetTVar
-    
+        
     mainBox <- vBoxNew False 0
 
-    _ <- HaskQuery.runQueryM $ do
-        widgets <- getWidgets widgetTVar
-        mainWindow <- selectWidget widgets "mainWindow" windowProxy 
-        HaskQuery.executeM $ containerAdd mainWindow mainBox
+    _ <- makeButtonBar widgetTVar $ HaskQuery.insertRows HaskQuery.empty [
+                Named { _identifier = "openProjectButton", _content =  newFileChooser $ loadFile editor},
+                Named { _identifier = "saveProjectButton", _content =  saveFiles editor},
+                Named { _identifier = "refreshProjectButton", _content = refreshFolders editor}
+            ]              
+        
 
-    buttonBar <- hBoxNew False 0
-    
-    buttonBarButtons <- makeButtons 
-    atomically $ do
-        modifyTVar widgetTVar (\currentWidget -> currentWidget {_widgets = HaskQuery.insertInto (_widgets currentWidget) (HaskQuery.select (_widgets buttonBarButtons))})
-    _ <- HaskQuery.runQueryM $ do
-        namedWidget <- HaskQuery.selectM (_widgets buttonBarButtons) 
-        button <- HaskQuery.selectDynamicWithTypeM buttonProxy (_content namedWidget)
-        _ <- HaskQuery.executeM (boxPackStart buttonBar button PackNatural 0)
-        return ()
-    
-    widgetShowAll buttonBar
-    
-    boxPackStart mainBox buttonBar PackNatural 0
-          
-    editor <- makeEditor  
-
-    let buttonCallbacks :: HaskQuery.Relation (Named (Button -> IO (ConnectId Button)) ) ()
-        buttonCallbacks = HaskQuery.insertRows HaskQuery.empty [
-            Named { _identifier = "openProjectButton", _content = (\namedButton -> onClicked namedButton $ newFileChooser $ loadFile editor)},
-            Named { _identifier = "saveProjectButton", _content = (\namedButton -> onClicked namedButton $ saveFiles editor)},
-            Named { _identifier = "refreshProjectButton", _content = (\namedButton -> onClicked namedButton $ refreshFolders editor)}
-            ]    
-
-    _ <- HaskQuery.runQueryM $ do
-        widgets <- getWidgets widgetTVar
-        callback <- HaskQuery.selectM buttonCallbacks
-        button <- selectWidget widgets (_identifier callback) buttonProxy
-        _ <- HaskQuery.executeM $ (_content callback) button
-        return ()
-
-    _ <- onRowActivated (_fileTreeView editor) $ openFileChooserFile editor
-    
-    boxPackStart mainBox (mainPane editor) PackGrow 0
+    _ <- onRowActivated (_fileTreeView editor) $ openFileChooserFile editor    
              
-
-    
+      
+    _ <- HaskQuery.runQueryM $ do
+        widgets <- getWidgets widgetTVar
+        buttonBar <- selectWidgetRef widgets buttonBarRef
+        _ <- HaskQuery.executeM $ boxPackStart mainBox buttonBar PackNatural 0
+        return ()
+    _ <- HaskQuery.runQueryM $ do
+        widgets <- getWidgets widgetTVar
+        editorPaneWidget <- selectWidgetRef widgets editorPane
+        _ <- HaskQuery.executeM $ boxPackStart mainBox editorPaneWidget PackGrow 0
+        return ()
     widgetShowAll mainBox
 
     _ <- HaskQuery.runQueryM $ do
+        widgets <- getWidgets widgetTVar
+        mainWindow <- selectWidgetRef widgets mainWindowRef
+        HaskQuery.executeM $ containerAdd mainWindow mainBox
+    _ <- HaskQuery.runQueryM $ do
         widgets <- HaskQuery.executeM $ readTVarIO widgetTVar
-        mainWindow <- selectWidget widgets "mainWindow" windowProxy 
+        mainWindow <- selectWidgetRef widgets mainWindowRef
         HaskQuery.executeM $ widgetShowAll mainWindow
     mainGUI
 
-getWidgets :: TVar(Widgets) -> Control.Monad.Trans.Cont.Cont (b -> IO b) Widgets
-getWidgets widgetTVar = HaskQuery.executeM $ readTVarIO widgetTVar
 
-selectWidget :: Typeable a => Widgets -> String -> Proxy a -> (Control.Monad.Trans.Cont.Cont (b -> IO b) a)
-selectWidget widgets identifier typeProxy = do        
-        widget <- HaskQuery.selectM $ _widgets widgets
-        HaskQuery.filterM $ (_identifier widget) == identifier
-        selectedWidget <- HaskQuery.selectDynamicWithTypeM typeProxy (_content widget)
-        return selectedWidget
+
 
 openFileChooserFile :: EditorWindow -> TreePath -> t -> IO ()    
 openFileChooserFile editor treePath treeViewColumn = 
@@ -151,8 +104,8 @@ iconLabelRenderer label = case label of
 fileTreeStoreNew :: IO (TreeStore DirectoryEntry)
 fileTreeStoreNew = treeStoreNew []
 
-makeEditor :: IO EditorWindow
-makeEditor = do
+makeEditor :: TVar(Widgets) -> IO EditorWindow
+makeEditor widgetTVar = do
     mainVPane <- vPanedNew
     
     mainHBox <- hPanedNew
@@ -193,6 +146,9 @@ makeEditor = do
     
     ComponentWithInitializer consoleBook consoleBookInitializer <- shortcutPage
     panedAdd2 mainVPane consoleBook
+
+    insertWidget editorPane mainVPane widgetTVar
+
     widgetShow mainVPane
     
     panedSetPosition mainVPane 500
@@ -202,8 +158,10 @@ makeEditor = do
     propertyRelation <- atomically $ newTVar HaskQuery.empty
     
     guiId <- newIORef 0
+
     
-    let editorWindow =  EditorWindow { mainPane = mainVPane, 
+    
+    let editorWindow =  EditorWindow { 
                           _fileTreeView = fileTreeView, 
                           _fileTreeStore = treeStore, 
                           notebook = noteBook, 
