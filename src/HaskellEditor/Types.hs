@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 module HaskellEditor.Types
 
 where
@@ -12,12 +13,18 @@ import qualified HaskQuery
 import qualified HaskQuery.OrdIndex as OrdIndex
 import Data.Proxy
 
-data DirectoryEntry = Directory String | PlainFile String String
+data DirectoryEntry = Directory String | PlainFile String String deriving Typeable
 
 data ConfigurationProperty = ConfigurationProperty { _name :: String, _value :: String }
 
 data Named a = Named { _identifier :: String, _content :: a}
 data Widgets = Widgets {  _widgets :: HaskQuery.Relation (Named Dynamic) (OrdIndex.OrdIndex String)}
+data WithUniqueIds a = WithUniqueIds { _item :: a ,   nextId ::  IORef(Int)}
+
+withUniqueIds :: a -> IO( WithUniqueIds a)
+withUniqueIds item = do
+    guiId <- newIORef 0
+    return $ WithUniqueIds { _item = item, nextId = guiId }
 
 type WidgetRef a = Named (Proxy a)
 
@@ -29,15 +36,16 @@ emptyWidgets = Widgets{  _widgets = HaskQuery.emptyWithIndex $ OrdIndex.ordIndex
 
 namedDynamic :: Typeable a => String -> a -> Named Dynamic
 namedDynamic name value = Named {_identifier = name, _content = toDyn value }
-
+ 
 data EditorWindow = EditorWindow { 
-                                   _fileTreeStore :: TreeStore DirectoryEntry, 
-                                   _fileTreeView:: TreeView, 
+                                   _editorWidgets :: TVar(Widgets),
+                                  -- _fileTreeStore :: TreeStore DirectoryEntry, 
                                    notebook :: Notebook, 
-                                   _rootPath :: TVar (Maybe FilePath),                                    
-                                   nextGuiId :: IORef (Int), 
+                                   _rootPath :: TVar (Maybe FilePath),
+                                   nextGuiId :: IORef (Int),                                    
                                    sourceBuffers :: TVar ( IntMap.IntMap (String, SourceBuffer)),
                                    _properties :: TVar (HaskQuery.Relation ConfigurationProperty ())
                                    }
 
 type EditorInitializer = EditorWindow -> IO ()
+

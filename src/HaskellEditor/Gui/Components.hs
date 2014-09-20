@@ -7,9 +7,9 @@ import HaskQuery
 import Control.Concurrent.STM
 import HaskellEditor.Types
 import HaskellEditor.Dynamic
+import HaskellEditor.Gui.Util
 import Data.Typeable
-import Data.Proxy
-import qualified Control.Monad.Trans.Cont
+
 
 mainWindowRef :: WidgetRef Window
 mainWindowRef = widgetReference "mainWindow"
@@ -20,25 +20,6 @@ buttonBarRef = widgetReference "buttonBar"
 editorPane :: WidgetRef VPaned
 editorPane = widgetReference "editorPane"
 
-getWidgets :: TVar(Widgets) -> Control.Monad.Trans.Cont.Cont (b -> IO b) Widgets
-getWidgets widgetTVar = HaskQuery.executeM $ readTVarIO widgetTVar
-
-selectWidget :: Typeable a => Widgets -> String -> Proxy a -> (Control.Monad.Trans.Cont.Cont (b -> IO b) a)
-selectWidget widgets identifier typeProxy = do        
-        widget <- HaskQuery.selectM $ _widgets widgets
-        HaskQuery.filterM $ (_identifier widget) == identifier
-        selectedWidget <- HaskQuery.selectDynamicWithTypeM typeProxy (_content widget)
-        return selectedWidget
-
-
-selectWidgetRef :: Typeable a => Widgets -> WidgetRef a -> (Control.Monad.Trans.Cont.Cont (b -> IO b) a)
-selectWidgetRef widgets widgetRef = selectWidget widgets (_identifier widgetRef) (_content widgetRef)
-
-insertWidget :: Typeable a => WidgetRef a -> a -> TVar(Widgets) -> IO ()
-insertWidget widgetRef widget widgetTVar = atomically $ do
-        let namedWidget = namedDynamic (_identifier widgetRef) widget
-        modifyTVar widgetTVar (\currentWidget -> currentWidget {_widgets = HaskQuery.insert (_widgets currentWidget) namedWidget})
-        return ()
 
 makeButtonBar :: TVar(Widgets) -> HaskQuery.Relation (Named (IO ())) b -> IO (Widgets)
 makeButtonBar widgetTVar buttonCallbacks = do
@@ -78,10 +59,12 @@ makeButtons widgetTVar buttonCallbacks = do
         return ()
     return buttons
 
+
+
 createMainWindow :: TVar (Widgets) -> IO()
 createMainWindow widgetTVar = do
     window <- windowNew
-    set window [windowDefaultWidth := 800, windowDefaultHeight := 600]
+    set window [windowDefaultWidth := 800, windowDefaultHeight := 500]
     _ <- onDestroy window mainQuit       
     atomically $ do
         modifyTVar widgetTVar (\currentWidget -> currentWidget { _widgets = HaskQuery.insert (_widgets currentWidget) $ namedDynamic (_identifier mainWindowRef) window} )   

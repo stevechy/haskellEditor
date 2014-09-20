@@ -1,4 +1,5 @@
 import Graphics.UI.Gtk
+import Graphics.UI.Gtk.Gdk.Events as Gdk.Events
 import Graphics.UI.Gtk.SourceView.SourceView
 import Graphics.UI.Gtk.SourceView.SourceBuffer
 import Graphics.UI.Gtk.SourceView.SourceLanguageManager
@@ -6,18 +7,21 @@ import Graphics.UI.Gtk.SourceView.SourceLanguageManager
 import System.Directory
 import System.FilePath
 import Control.Concurrent.STM
+import Data.IORef
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map as Map
-import Data.IORef
 
 import HaskellEditor.Files
 import HaskellEditor.Types
 import HaskellEditor.ShellExecution
 import HaskellEditor.Configuration
 import HaskellEditor.Configuration.Types
-import HaskellEditor.Dynamic()
+import HaskellEditor.Dynamic
 import HaskellEditor.Gui.Components
+import HaskellEditor.Gui.FileTree
+import HaskellEditor.Gui.Util
 import qualified HaskQuery
+
 
 
 data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
@@ -44,28 +48,26 @@ main = do
                 Named { _identifier = "refreshProjectButton", _content = refreshFolders editor}
             ]              
         
+    widgets <- readTVarIO widgetTVar 
 
-    _ <- onRowActivated (_fileTreeView editor) $ openFileChooserFile editor    
-             
+    _ <- HaskQuery.runQueryM $ do
+        fileTreeView <- selectWidget widgets "fileTreeView" treeViewProxy  
+        HaskQuery.executeM $ onRowActivated fileTreeView $ openFileChooserFile editor                 
       
-    _ <- HaskQuery.runQueryM $ do
-        widgets <- getWidgets widgetTVar
+    _ <- HaskQuery.runQueryM $ do 
         buttonBar <- selectWidgetRef widgets buttonBarRef
-        _ <- HaskQuery.executeM $ boxPackStart mainBox buttonBar PackNatural 0
-        return ()
-    _ <- HaskQuery.runQueryM $ do
-        widgets <- getWidgets widgetTVar
+        HaskQuery.executeM $ boxPackStart mainBox buttonBar PackNatural 0
+        
+    _ <- HaskQuery.runQueryM $ do 
         editorPaneWidget <- selectWidgetRef widgets editorPane
-        _ <- HaskQuery.executeM $ boxPackStart mainBox editorPaneWidget PackGrow 0
-        return ()
+        HaskQuery.executeM $ boxPackStart mainBox editorPaneWidget PackGrow 0
+        
     widgetShowAll mainBox
 
     _ <- HaskQuery.runQueryM $ do
-        widgets <- getWidgets widgetTVar
         mainWindow <- selectWidgetRef widgets mainWindowRef
         HaskQuery.executeM $ containerAdd mainWindow mainBox
-    _ <- HaskQuery.runQueryM $ do
-        widgets <- HaskQuery.executeM $ readTVarIO widgetTVar
+    _ <- HaskQuery.runQueryM $ do 
         mainWindow <- selectWidgetRef widgets mainWindowRef
         HaskQuery.executeM $ widgetShowAll mainWindow
     mainGUI
@@ -74,29 +76,23 @@ main = do
 
 
 openFileChooserFile :: EditorWindow -> TreePath -> t -> IO ()    
-openFileChooserFile editor treePath treeViewColumn = 
-  do
-    let treeStore = _fileTreeStore editor
-    dirEntry <- treeStoreGetValue treeStore treePath
-    case dirEntry of
-      PlainFile fileName filePath -> do
-        tabNum <- addNotebookTab editor filePath
-        widgetQueueDraw (notebook editor)
-      _ -> return ()
+openFileChooserFile editor treePath treeViewColumn = do
+    _ <- HaskQuery.runQueryM $ do
+        widgets <- getWidgets (_editorWidgets editor)
+        treeStore <- selectWidget widgets "fileTreeStore" directoryEntryTreeStoreProxy 
+        HaskQuery.executeM $ do  
+            dirEntry <- treeStoreGetValue treeStore treePath
+            case dirEntry of
+                PlainFile fileName filePath -> do
+                    tabNum <- addNotebookTab editor filePath
+                    widgetQueueDraw (notebook editor)
+                _ -> return ()
+            return ()
     return ()
 
-fileLabelRenderer :: CellRendererTextClass o => DirectoryEntry -> [AttrOp o]    
-fileLabelRenderer label = case label of
-  Directory directory -> [cellText := directory]
-  PlainFile file _ ->  [cellText := file]
 
-iconLabelRenderer :: CellRendererPixbufClass o => DirectoryEntry -> [AttrOp o]
-iconLabelRenderer label = case label of
-  Directory directory -> [cellPixbufStockId := stockDirectory]
-  _ -> [cellPixbufStockId := stockFile]
 
-fileTreeStoreNew :: IO (TreeStore DirectoryEntry)
-fileTreeStoreNew = treeStoreNew []
+
 
 makeEditor :: TVar(Widgets) -> IO EditorWindow
 makeEditor widgetTVar = do
@@ -105,26 +101,7 @@ makeEditor widgetTVar = do
     mainHBox <- hPanedNew
     panedSetPosition mainHBox 250
     fileTreeScrolledWindow <- scrolledWindowNew Nothing Nothing
-    treeStore <- fileTreeStoreNew
-    
-    fileTreeView <- treeViewNewWithModel treeStore
-    
-
-
-    iconTheme <- iconThemeGetDefault
-    
-    treeViewColumn <- treeViewColumnNew
-    treeViewColumnSetTitle treeViewColumn "Project Files"
-    typePix <- cellRendererPixbufNew
-    cellRenderer <- cellRendererTextNew
-    treeViewColumnPackStart treeViewColumn typePix True
-    treeViewColumnPackStart treeViewColumn cellRenderer True 
-    cellLayoutSetAttributes treeViewColumn cellRenderer treeStore fileLabelRenderer
-    cellLayoutSetAttributes treeViewColumn typePix treeStore iconLabelRenderer
-    
-    _ <- treeViewAppendColumn fileTreeView treeViewColumn
-    Just maybeColumn <- treeViewGetColumn fileTreeView 0
-
+    fileTreeView <- makeFileTreeView widgetTVar
     containerAdd fileTreeScrolledWindow fileTreeView
     widgetShowAll fileTreeView
     widgetShowAll fileTreeScrolledWindow
@@ -145,19 +122,17 @@ makeEditor widgetTVar = do
 
     widgetShow mainVPane
     
-    panedSetPosition mainVPane 500
+    panedSetPosition mainVPane 400
     
     filePath <- atomically $ newTVar Nothing
     buffers <- atomically $ newTVar IntMap.empty
     propertyRelation <- atomically $ newTVar HaskQuery.empty
     
+   
     guiId <- newIORef 0
-
     
-    
-    let editorWindow =  EditorWindow { 
-                          _fileTreeView = fileTreeView, 
-                          _fileTreeStore = treeStore, 
+    let editorWindow =  EditorWindow {   
+                          _editorWidgets = widgetTVar, 
                           notebook = noteBook, 
                           _rootPath = filePath, 
                           nextGuiId = guiId,
@@ -299,11 +274,14 @@ refreshFolders editor = do
   canonicalRootPathMaybe <- atomically $ readTVar (_rootPath editor) 
   case canonicalRootPathMaybe of 
         Just canonicalRootPath -> do
-                                    forest <- getDirContentsAsTree canonicalRootPath
-                                    let fileTreeStore = _fileTreeStore editor 
-                                    treeStoreClear fileTreeStore  
-                                    treeStoreInsertForest fileTreeStore [] 0 forest
-                                    return ()
+                                        forest <- getDirContentsAsTree canonicalRootPath
+                                        _ <- HaskQuery.runQueryM $ do
+                                            widgets <- getWidgets (_editorWidgets editor)
+                                            fileTreeStore <- selectWidget widgets "fileTreeStore" directoryEntryTreeStoreProxy 
+                                            HaskQuery.executeM $ do
+                                                treeStoreClear fileTreeStore  
+                                                treeStoreInsertForest fileTreeStore [] 0 forest
+                                        return ()
         Nothing -> return ()
 
 getCanonicalRootPath :: Configuration -> FilePath -> IO FilePath
