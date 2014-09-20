@@ -8,7 +8,6 @@ import Control.Concurrent.STM
 import HaskellEditor.Types
 import HaskellEditor.Dynamic
 import HaskellEditor.Gui.Util
-import Data.Typeable
 
 
 mainWindowRef :: WidgetRef Window

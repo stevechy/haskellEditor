@@ -3,7 +3,7 @@ where
 import Graphics.UI.Gtk
 import HaskellEditor.Gui.Util
 import HaskellEditor.Types
-import HaskellEditor.Dynamic
+import HaskellEditor.Dynamic()
 import Control.Concurrent.STM
 
 fileLabelRenderer :: CellRendererTextClass o => DirectoryEntry -> [AttrOp o]    
@@ -13,8 +13,17 @@ fileLabelRenderer label = case label of
 
 iconLabelRenderer :: CellRendererPixbufClass o => DirectoryEntry -> [AttrOp o]
 iconLabelRenderer label = case label of
-  Directory directory -> [cellPixbufStockId := stockDirectory]
+  Directory _directory -> [cellPixbufStockId := stockDirectory]
   _ -> [cellPixbufStockId := stockFile]
+
+makeFileTreeScrolledWindow :: TVar(Widgets) -> IO ScrolledWindow
+makeFileTreeScrolledWindow widgetTVar = 
+    do  fileTreeScrolledWindow <- scrolledWindowNew Nothing Nothing
+        fileTreeView <- makeFileTreeView widgetTVar
+        containerAdd fileTreeScrolledWindow fileTreeView
+        widgetShowAll fileTreeView
+        widgetShowAll fileTreeScrolledWindow
+        return fileTreeScrolledWindow
 
 makeFileTreeView :: TVar(Widgets) -> IO TreeView
 makeFileTreeView widgetTVar = 

@@ -14,6 +14,7 @@ deriving instance Typeable VPaned
 deriving instance Typeable HBox
 deriving instance Typeable TreeView
 deriving instance Typeable1 (TreeStore )
+deriving instance Typeable Notebook
 
 windowProxy :: Proxy Window
 windowProxy = Proxy

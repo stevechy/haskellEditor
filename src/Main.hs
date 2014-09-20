@@ -1,15 +1,12 @@
 import Graphics.UI.Gtk
-import Graphics.UI.Gtk.Gdk.Events as Gdk.Events
-import Graphics.UI.Gtk.SourceView.SourceView
-import Graphics.UI.Gtk.SourceView.SourceBuffer
-import Graphics.UI.Gtk.SourceView.SourceLanguageManager
+
+
 
 import System.Directory
 import System.FilePath
 import Control.Concurrent.STM
 import Data.IORef
 import qualified Data.IntMap.Strict as IntMap
-import qualified Data.Map as Map
 
 import HaskellEditor.Files
 import HaskellEditor.Types
@@ -19,17 +16,9 @@ import HaskellEditor.Configuration.Types
 import HaskellEditor.Dynamic
 import HaskellEditor.Gui.Components
 import HaskellEditor.Gui.FileTree
+import HaskellEditor.Gui.SourceTabBook
 import HaskellEditor.Gui.Util
 import qualified HaskQuery
-
-
-
-data ComponentWithInitializer a = ComponentWithInitializer a EditorInitializer
-
-
-
-languageFileExtensions :: Map.Map [Char] [Char]
-languageFileExtensions = Map.fromList [(".hs", "haskell")]
 
 
 main :: IO ()
@@ -76,16 +65,16 @@ main = do
 
 
 openFileChooserFile :: EditorWindow -> TreePath -> t -> IO ()    
-openFileChooserFile editor treePath treeViewColumn = do
+openFileChooserFile editor treePath _treeViewColumn = do
     _ <- HaskQuery.runQueryM $ do
         widgets <- getWidgets (_editorWidgets editor)
         treeStore <- selectWidget widgets "fileTreeStore" directoryEntryTreeStoreProxy 
         HaskQuery.executeM $ do  
             dirEntry <- treeStoreGetValue treeStore treePath
             case dirEntry of
-                PlainFile fileName filePath -> do
-                    tabNum <- addNotebookTab editor filePath
-                    widgetQueueDraw (notebook editor)
+                PlainFile _fileName filePath -> 
+                  do  _tabNum <- addNotebookTab editor filePath
+                      return () 
                 _ -> return ()
             return ()
     return ()
@@ -96,18 +85,30 @@ openFileChooserFile editor treePath treeViewColumn = do
 
 makeEditor :: TVar(Widgets) -> IO EditorWindow
 makeEditor widgetTVar = do
+    filePath <- atomically $ newTVar Nothing
+    buffers <- atomically $ newTVar IntMap.empty
+    propertyRelation <- atomically $ newTVar HaskQuery.empty
+    noteBook <- notebookNew
+    insertWidget sourceTabBook noteBook widgetTVar
+   
+    guiId <- newIORef 0
+    
+    let editorWindow =  EditorWindow {   
+                          _editorWidgets = widgetTVar,   
+                          _rootPath = filePath, 
+                          nextGuiId = guiId,
+                          sourceBuffers = buffers,
+                          _properties = propertyRelation
+                        } 
+
     mainVPane <- vPanedNew
     
     mainHBox <- hPanedNew
     panedSetPosition mainHBox 250
-    fileTreeScrolledWindow <- scrolledWindowNew Nothing Nothing
-    fileTreeView <- makeFileTreeView widgetTVar
-    containerAdd fileTreeScrolledWindow fileTreeView
-    widgetShowAll fileTreeView
-    widgetShowAll fileTreeScrolledWindow
+    fileTreeScrolledWindow <- makeFileTreeScrolledWindow widgetTVar
     panedAdd1 mainHBox fileTreeScrolledWindow 
     
-    noteBook <- notebookNew
+   
     notebookSetScrollable noteBook True
     widgetShow noteBook
     panedAdd2 mainHBox noteBook    
@@ -115,7 +116,8 @@ makeEditor widgetTVar = do
     panedAdd1 mainVPane mainHBox
     widgetShow mainHBox
     
-    ComponentWithInitializer consoleBook consoleBookInitializer <- shortcutPage
+    consoleBook <- shortcutPage editorWindow
+   
     panedAdd2 mainVPane consoleBook
 
     insertWidget editorPane mainVPane widgetTVar
@@ -124,26 +126,12 @@ makeEditor widgetTVar = do
     
     panedSetPosition mainVPane 400
     
-    filePath <- atomically $ newTVar Nothing
-    buffers <- atomically $ newTVar IntMap.empty
-    propertyRelation <- atomically $ newTVar HaskQuery.empty
+ 
     
-   
-    guiId <- newIORef 0
-    
-    let editorWindow =  EditorWindow {   
-                          _editorWidgets = widgetTVar, 
-                          notebook = noteBook, 
-                          _rootPath = filePath, 
-                          nextGuiId = guiId,
-                          sourceBuffers = buffers,
-                          _properties = propertyRelation
-                        } 
-    consoleBookInitializer editorWindow
     return editorWindow
 
-shortcutPage :: IO (ComponentWithInitializer Notebook)
-shortcutPage = do
+shortcutPage :: EditorWindow -> IO (Notebook)
+shortcutPage editorWindow = do
     consoleBook <- notebookNew
     notebookSetTabPos consoleBook PosBottom
     shortcutPane <- vBoxNew False 0
@@ -164,83 +152,11 @@ shortcutPage = do
 
     _ <- notebookAppendPage consoleBook shortcutPane "Shortcuts"
     widgetShow consoleBook
-    return $ ComponentWithInitializer consoleBook (\ editor -> onClicked saveButton (runCabal editor consoleOut ("cabal" , ["install"])) >> onClicked cleanButton (runCabal editor consoleOut ("cabal", ["clean"])) >> onClicked runButton (runCabal editor consoleOut ("cabal", ["run"])) >> return ())   
-
-
-
-
-
-addNotebookTab :: EditorWindow -> String -> IO (Int)
-addNotebookTab editor title = do
-    let noteBook = notebook editor
-    textViewScrolledWindow <- scrolledWindowNew Nothing Nothing
-   
     
-    sourceLanguageManager <- sourceLanguageManagerGetDefault
-    
-    let languageKeyMaybe = Map.lookup (takeExtension title) languageFileExtensions
-    languageMaybe <- case languageKeyMaybe of
-      Just language ->  sourceLanguageManagerGetLanguage sourceLanguageManager language
-      Nothing -> return Nothing
-    
-    sourceBuffer <- sourceBufferNew Nothing
-    
-    
-    
-    _ <- sourceBufferSetLanguage sourceBuffer languageMaybe
-    
-    rootPath <- atomically $ readTVar $ _rootPath editor
-    case rootPath of
-      Just path -> do
-        fileContents <- readFile (combine path title)              
-        textBufferSetText sourceBuffer fileContents
-        return ()
-      Nothing -> return ()
-    textView <- sourceViewNewWithBuffer sourceBuffer 
-    sourceViewSetShowLineNumbers textView True
-    font <- fontDescriptionNew
-    fontDescriptionSetFamily font "monospace"
-    widgetModifyFont textView (Just font)
-    containerAdd textViewScrolledWindow textView
-    widgetShowAll textViewScrolledWindow
-    
-    guiId <- atomicModifyIORef (nextGuiId editor) (\x -> (x+1, x) )
-    
-    _ <- atomically $ do
-      modifyTVar' (sourceBuffers editor) (\bufferMap -> IntMap.insert guiId (title, sourceBuffer) bufferMap)
-      return ()
-    
-    tabBar <- hBoxNew False 0
-    tabLabel <- labelNew (Just title)
-    closeImage <- imageNewFromStock stockClose IconSizeSmallToolbar
-    tabClose <- buttonNew
-    
-    buttonSetImage tabClose closeImage 
-    buttonSetRelief tabClose ReliefNone
-    buttonSetFocusOnClick tabClose False
-    
-    _ <- onClicked tabClose $ do 
-      pageNumberMaybe <- notebookPageNum noteBook textViewScrolledWindow
-      case pageNumberMaybe of
-        Just pageNumber -> do
-                               notebookRemovePage noteBook pageNumber
-                               atomically $ do 
-                                 modifyTVar (sourceBuffers editor ) (IntMap.delete guiId)                                 
-                                 return ()
-                               return ()
-        Nothing -> return ()
-    
-    boxPackStart tabBar tabLabel PackGrow 0
-    boxPackStart tabBar tabClose PackNatural 0
-    
-    widgetShowAll tabBar
-    
-    let menuLabelText :: Maybe String
-        menuLabelText = Nothing
-    menuLabel <- labelNew menuLabelText
-    
-    notebookAppendPageMenu noteBook textViewScrolledWindow tabBar menuLabel
-
+    _ <- onClicked saveButton (runCabal editorWindow consoleOut ("cabal" , ["install"]))
+    _ <- onClicked cleanButton (runCabal editorWindow consoleOut ("cabal", ["clean"]))
+    _ <- onClicked runButton (runCabal editorWindow consoleOut ("cabal", ["run"]))   
+    return consoleBook
 
 
 loadFile :: EditorWindow -> FilePath -> IO ()
