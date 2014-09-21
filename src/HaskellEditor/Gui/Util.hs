@@ -14,6 +14,11 @@ insertNamedWidget widgetTVar name widget =
         modifyTVar widgetTVar $ \currentWidget -> 
                  currentWidget {_widgets = HaskQuery.insert (_widgets currentWidget) $ namedDynamic name widget}
 
+insertWidgets :: TVar(Widgets) -> Widgets -> IO ()
+insertWidgets widgetTVar widgets = do
+    atomically $ do
+        modifyTVar widgetTVar (\currentWidget -> currentWidget {_widgets = HaskQuery.insertInto (_widgets currentWidget) (HaskQuery.select (_widgets widgets))})
+
 
 getWidgets :: TVar(Widgets) -> HaskQuery.Cont (b -> IO b) Widgets
 getWidgets widgetTVar = HaskQuery.executeM $ readTVarIO widgetTVar

@@ -23,3 +23,10 @@ parseConfig filePath = do
             return Nothing
         Right configuration -> return $ Just configuration
     
+getCanonicalRootPath :: Configuration -> FilePath -> IO FilePath
+getCanonicalRootPath config filepath = do
+  let configRootFolder = rootFolder config
+  HaskellEditor.Files.getCanonicalRootPathFromPath configRootFolder filepath
+  
+
+

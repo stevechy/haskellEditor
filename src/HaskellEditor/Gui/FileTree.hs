@@ -6,6 +6,9 @@ import HaskellEditor.Types
 import HaskellEditor.Dynamic()
 import Control.Concurrent.STM
 
+fileTreeStoreRef :: WidgetRef (TreeStore DirectoryEntry)
+fileTreeStoreRef = widgetReference "fileTreeStore"
+
 fileLabelRenderer :: CellRendererTextClass o => DirectoryEntry -> [AttrOp o]    
 fileLabelRenderer label = case label of
   Directory directory -> [cellText := directory]
@@ -31,7 +34,7 @@ makeFileTreeView widgetTVar =
     
         fileTreeView <- treeViewNewWithModel treeStore
         insertNamedWidget widgetTVar "fileTreeView" fileTreeView
-        insertNamedWidget widgetTVar "fileTreeStore" treeStore
+        insertNamedWidget widgetTVar (_identifier fileTreeStoreRef) treeStore
     
         treeViewColumn <- treeViewColumnNew
         treeViewColumnSetTitle treeViewColumn "Project Files"
@@ -48,3 +51,4 @@ makeFileTreeView widgetTVar =
 
 fileTreeStoreNew :: IO (TreeStore DirectoryEntry)
 fileTreeStoreNew = treeStoreNew []
+

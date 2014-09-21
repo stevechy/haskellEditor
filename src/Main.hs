@@ -1,19 +1,13 @@
 import Graphics.UI.Gtk
 
 
-
-import System.Directory
-import System.FilePath
 import Control.Concurrent.STM
-import Data.IORef
-import qualified Data.IntMap.Strict as IntMap
 
 import HaskellEditor.Files
 import HaskellEditor.Types
 import HaskellEditor.ShellExecution
-import HaskellEditor.Configuration
-import HaskellEditor.Configuration.Types
 import HaskellEditor.Dynamic
+import HaskellEditor.Editor
 import HaskellEditor.Gui.Components
 import HaskellEditor.Gui.FileTree
 import HaskellEditor.Gui.SourceTabBook
@@ -23,13 +17,12 @@ import qualified HaskQuery
 
 main :: IO ()
 main = do
-    _ <- initGUI
-    widgetTVar <- atomically $ newTVar emptyWidgets
+    _ <- initGUI    
 
-    editor <- makeEditor widgetTVar 
+    editor <- makeEditor  
+    let widgetTVar = _editorWidgets editor
     createMainWindow widgetTVar
-        
-    mainBox <- vBoxNew False 0
+           
 
     _ <- makeButtonBar widgetTVar $ HaskQuery.insertRows HaskQuery.empty [
                 Named { _identifier = "openProjectButton", _content =  newFileChooser $ loadFile editor},
@@ -41,8 +34,9 @@ main = do
 
     _ <- HaskQuery.runQueryM $ do
         fileTreeView <- selectWidget widgets "fileTreeView" treeViewProxy  
-        HaskQuery.executeM $ onRowActivated fileTreeView $ openFileChooserFile editor                 
-      
+        HaskQuery.executeM $ onRowActivated fileTreeView $ openFileChooserFile editor   
+              
+    mainBox <- vBoxNew False 0
     _ <- HaskQuery.runQueryM $ do 
         buttonBar <- selectWidgetRef widgets buttonBarRef
         HaskQuery.executeM $ boxPackStart mainBox buttonBar PackNatural 0
@@ -68,65 +62,52 @@ openFileChooserFile :: EditorWindow -> TreePath -> t -> IO ()
 openFileChooserFile editor treePath _treeViewColumn = do
     _ <- HaskQuery.runQueryM $ do
         widgets <- getWidgets (_editorWidgets editor)
-        treeStore <- selectWidget widgets "fileTreeStore" directoryEntryTreeStoreProxy 
+        treeStore <- selectWidgetRef widgets fileTreeStoreRef 
         HaskQuery.executeM $ do  
             dirEntry <- treeStoreGetValue treeStore treePath
-            case dirEntry of
-                PlainFile _fileName filePath -> 
-                  do  _tabNum <- addNotebookTab editor filePath
-                      return () 
-                _ -> return ()
-            return ()
+            openFileInSourceTab editor dirEntry
     return ()
 
+openFileInSourceTab :: EditorWindow -> DirectoryEntry -> IO ()
+openFileInSourceTab editor directoryEntry = do
+    case directoryEntry of
+        PlainFile _fileName filePath -> 
+            do  _tabNum <- addNotebookTab editor filePath
+                return () 
+        _ -> return ()    
 
 
 
+makeEditor :: IO EditorWindow
+makeEditor = do    
+    editorWindow <- makeEditorWindow
+    let widgetTVar = _editorWidgets editorWindow
 
-makeEditor :: TVar(Widgets) -> IO EditorWindow
-makeEditor widgetTVar = do
-    filePath <- atomically $ newTVar Nothing
-    buffers <- atomically $ newTVar IntMap.empty
-    propertyRelation <- atomically $ newTVar HaskQuery.empty
+    fileTreeScrolledWindow <- makeFileTreeScrolledWindow widgetTVar
+    
+    
     noteBook <- notebookNew
-    insertWidget sourceTabBook noteBook widgetTVar
-   
-    guiId <- newIORef 0
-    
-    let editorWindow =  EditorWindow {   
-                          _editorWidgets = widgetTVar,   
-                          _rootPath = filePath, 
-                          nextGuiId = guiId,
-                          sourceBuffers = buffers,
-                          _properties = propertyRelation
-                        } 
+    notebookSetScrollable noteBook True
+    insertWidget sourceTabBook noteBook widgetTVar    
+    widgetShow noteBook
 
-    mainVPane <- vPanedNew
-    
     mainHBox <- hPanedNew
     panedSetPosition mainHBox 250
-    fileTreeScrolledWindow <- makeFileTreeScrolledWindow widgetTVar
     panedAdd1 mainHBox fileTreeScrolledWindow 
-    
-   
-    notebookSetScrollable noteBook True
-    widgetShow noteBook
     panedAdd2 mainHBox noteBook    
-    
-    panedAdd1 mainVPane mainHBox
     widgetShow mainHBox
-    
+
+
     consoleBook <- shortcutPage editorWindow
-   
+
+
+    mainVPane <- vPanedNew
+    panedAdd1 mainVPane mainHBox
     panedAdd2 mainVPane consoleBook
+    panedSetPosition mainVPane 400
+    widgetShow mainVPane
 
     insertWidget editorPane mainVPane widgetTVar
-
-    widgetShow mainVPane
-    
-    panedSetPosition mainVPane 400
-    
- 
     
     return editorWindow
 
@@ -159,74 +140,7 @@ shortcutPage editorWindow = do
     return consoleBook
 
 
-loadFile :: EditorWindow -> FilePath -> IO ()
-loadFile editor path = do
-  configuration <- if (takeExtension path) == ".cabal"
-                        then return $ Just $ Configuration { rootFolder =".", cabalFile = takeFileName path, commands = Nothing }
-                        else loadConfigFile path
-  case configuration of
-    Just config -> do
-      putStrLn $ show $ config
-      loadConfiguration editor config path
-      return ()
-    Nothing -> do
-      messageDialog <- messageDialogNew Nothing [DialogModal] MessageError ButtonsOk "The selected file was not a propery Configuration.yaml file"
-      _ <- dialogRun messageDialog
-      widgetDestroy messageDialog
-      return ()
 
-loadConfiguration :: EditorWindow -> Configuration -> FilePath -> IO ()
-loadConfiguration editor config filepath = do
-  
-  canonicalRootPath <- getCanonicalRootPath config filepath
-  
-  atomically $ do 
-      writeTVar (_rootPath editor) $ Just canonicalRootPath  
-      modifyTVar (_properties editor) $ (\properties -> HaskQuery.insert properties (ConfigurationProperty { _name = "rootPath", _value = canonicalRootPath}))
-  refreshFolders editor
 
-refreshFolders :: EditorWindow -> IO ()
-refreshFolders editor = do
-  canonicalRootPathMaybe <- atomically $ readTVar (_rootPath editor) 
-  case canonicalRootPathMaybe of 
-        Just canonicalRootPath -> do
-                                        forest <- getDirContentsAsTree canonicalRootPath
-                                        _ <- HaskQuery.runQueryM $ do
-                                            widgets <- getWidgets (_editorWidgets editor)
-                                            fileTreeStore <- selectWidget widgets "fileTreeStore" directoryEntryTreeStoreProxy 
-                                            HaskQuery.executeM $ do
-                                                treeStoreClear fileTreeStore  
-                                                treeStoreInsertForest fileTreeStore [] 0 forest
-                                        return ()
-        Nothing -> return ()
 
-getCanonicalRootPath :: Configuration -> FilePath -> IO FilePath
-getCanonicalRootPath config filepath = do
-  path <- canonicalizePath filepath
-  let rootPath = combine (dropFileName path) $ rootFolder config
-  canonicalRootPath <- canonicalizePath rootPath
-  return canonicalRootPath
-
-newFileChooser ::  (FilePath -> IO t) -> IO ()
-newFileChooser handleChoice = do
-    window <- windowNew
-    set window [windowDefaultWidth := 800, windowDefaultHeight := 600]
-
-    fch <- fileChooserWidgetNew FileChooserActionOpen
-
-    containerAdd window fch
-
-    _ <- on fch fileActivated  $
-        do filePath <- fileChooserGetFilename fch
-           case filePath of
-               Just dpath -> do 
-                                _ <- handleChoice dpath
-                                widgetDestroy window
-               Nothing -> return ()
-     
-    _ <- fileChooserSetCurrentFolder fch "." 
-    
-    widgetShowAll fch
-    widgetShowAll window
-    return ()
 

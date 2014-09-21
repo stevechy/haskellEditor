@@ -89,3 +89,12 @@ getDirContentsAsTreeWithRelpath rootPath relPath = do
   forest <- mapM (getFileNode rootPath relPath) $ filter (\x -> x /= "." && x /= "..") $  dirContents
   return $ Data.List.sortBy orderDirectoryNodes forest      
   
+getCanonicalRootPathFromPath :: FilePath -> FilePath -> IO FilePath
+getCanonicalRootPathFromPath configRootFolder filepath = do
+  path <- System.Directory.canonicalizePath filepath
+  let rootPath = System.FilePath.combine (System.FilePath.dropFileName path) $ configRootFolder
+  canonicalRootPath <- System.Directory.canonicalizePath rootPath
+  return canonicalRootPath
+
+
+

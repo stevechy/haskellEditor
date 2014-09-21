@@ -33,9 +33,8 @@ makeButtonBar widgetTVar buttonCallbacks = do
         return ()
     
     widgetShowAll buttonBar
-    let buttonBarRelation = emptyWidgets { _widgets = HaskQuery.insert (_widgets emptyWidgets) $ namedDynamic (_identifier buttonBarRef) buttonBar} 
-    atomically $ do
-        modifyTVar widgetTVar (\currentWidget -> currentWidget {_widgets = HaskQuery.insertInto (_widgets currentWidget) (HaskQuery.select (_widgets buttonBarRelation))})
+    let buttonBarRelation = emptyWidgets { _widgets = HaskQuery.insert (_widgets emptyWidgets) $ namedDynamic (_identifier buttonBarRef) buttonBar}     
+    insertWidgets widgetTVar buttonBarRelation
     return buttonBarRelation 
 
 makeButtons :: TVar(Widgets) -> HaskQuery.Relation (Named (IO ())) b -> IO (Widgets)
@@ -47,9 +46,8 @@ makeButtons widgetTVar buttonCallbacks = do
     refreshButton <- fmap (namedDynamic "refreshProjectButton") $ buttonNewWithMnemonic "S_ynchronize Folders"
     let buttons = emptyWidgets { _widgets = HaskQuery.insertRows (_widgets emptyWidgets) [openProjectButton, saveButton, refreshButton]} 
 
-    atomically $ do
-        modifyTVar widgetTVar (\currentWidget -> currentWidget {_widgets = HaskQuery.insertInto (_widgets currentWidget) (HaskQuery.select (_widgets buttons))})
-
+    insertWidgets widgetTVar buttons
+    
     _ <- HaskQuery.runQueryM $ do
         widgets <- getWidgets widgetTVar
         callback <- HaskQuery.selectM buttonCallbacks
@@ -58,14 +56,34 @@ makeButtons widgetTVar buttonCallbacks = do
         return ()
     return buttons
 
+newFileChooser ::  (FilePath -> IO t) -> IO ()
+newFileChooser handleChoice = do
+    window <- windowNew
+    set window [windowDefaultWidth := 800, windowDefaultHeight := 600]
 
+    fch <- fileChooserWidgetNew FileChooserActionOpen
+
+    containerAdd window fch
+
+    _ <- on fch fileActivated  $
+        do filePath <- fileChooserGetFilename fch
+           case filePath of
+               Just dpath -> do 
+                                _ <- handleChoice dpath
+                                widgetDestroy window
+               Nothing -> return ()
+     
+    _ <- fileChooserSetCurrentFolder fch "." 
+    
+    widgetShowAll fch
+    widgetShowAll window
+    return ()
 
 createMainWindow :: TVar (Widgets) -> IO()
 createMainWindow widgetTVar = do
     window <- windowNew
     set window [windowDefaultWidth := 800, windowDefaultHeight := 500]
-    _ <- onDestroy window mainQuit       
-    atomically $ do
-        modifyTVar widgetTVar (\currentWidget -> currentWidget { _widgets = HaskQuery.insert (_widgets currentWidget) $ namedDynamic (_identifier mainWindowRef) window} )   
+    _ <- onDestroy window mainQuit 
+    insertWidget mainWindowRef window widgetTVar    
     return () 
 
